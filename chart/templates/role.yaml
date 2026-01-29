@@ -1,0 +1,12 @@
+{{- if and .Values.serviceAccount.create .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "guacamole.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+# Guacamole pods do not need any Kubernetes API access
+# This Role explicitly grants no permissions (deny-all)
+rules: []
+{{- end }}

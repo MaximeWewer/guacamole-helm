@@ -1,0 +1,20 @@
+{{- if and .Values.guacd.enabled .Values.guacd.pdb.enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "guacamole.guacd.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.guacd.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.guacd.pdb.minAvailable }}
+  minAvailable: {{ .Values.guacd.pdb.minAvailable }}
+  {{- else if .Values.guacd.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.guacd.pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: 1
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "guacamole.guacd.selectorLabels" . | nindent 6 }}
+{{- end }}

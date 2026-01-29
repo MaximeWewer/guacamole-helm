@@ -1,0 +1,22 @@
+{{- if .Values.guacamole.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "guacamole.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.client.labels" . | nindent 4 }}
+  {{- with .Values.guacamole.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.guacamole.service.type }}
+  ports:
+    - port: {{ .Values.guacamole.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "guacamole.client.selectorLabels" . | nindent 4 }}
+{{- end }}

@@ -1,0 +1,20 @@
+{{- if .Values.sqlserver.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "guacamole.fullname" . }}-sqlserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sqlserver
+spec:
+  type: {{ .Values.sqlserver.service.type }}
+  ports:
+    - port: {{ .Values.sqlserver.service.port }}
+      targetPort: sqlserver
+      protocol: TCP
+      name: sqlserver
+  selector:
+    {{- include "guacamole.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: sqlserver
+{{- end }}

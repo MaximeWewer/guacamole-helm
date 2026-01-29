@@ -1,0 +1,166 @@
+{{- if and .Values.database.init.enabled .Values.database.init.useHooks (or .Values.postgresql.enabled .Values.database.external.enabled) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "guacamole.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-init
+  {{- if .Values.database.init.useHooks }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": {{ .Values.database.init.hookWeight | quote }}
+    "helm.sh/hook-delete-policy": {{ .Values.database.init.hookDeletePolicy }}
+  {{- end }}
+spec:
+  {{- if .Values.database.init.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ .Values.database.init.ttlSecondsAfterFinished }}
+  {{- end }}
+  backoffLimit: {{ .Values.database.init.backoffLimit | default 3 }}
+  template:
+    metadata:
+      labels:
+        {{- include "guacamole.labels" . | nindent 8 }}
+        app.kubernetes.io/component: db-init
+    spec:
+      {{- with .Values.guacamole.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        # Generate the SQL schema using guacamole's initdb.sh
+        - name: generate-schema
+          image: "{{ .Values.database.init.image.repository | default .Values.guacamole.image.repository }}:{{ .Values.database.init.image.tag | default .Values.guacamole.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.database.init.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Generating Guacamole database schema..."
+              {{- if eq .Values.database.type "postgresql" }}
+              /opt/guacamole/bin/initdb.sh --postgresql > /schema/initdb.sql
+              {{- else if eq .Values.database.type "mysql" }}
+              /opt/guacamole/bin/initdb.sh --mysql > /schema/initdb.sql
+              {{- end }}
+              echo "Schema generated successfully."
+              ls -la /schema/
+          volumeMounts:
+            - name: schema
+              mountPath: /schema
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.database.init.resources | nindent 12 }}
+      containers:
+        # Apply the schema to the database
+        - name: apply-schema
+          {{- if eq .Values.database.type "postgresql" }}
+          image: "bitnami/postgresql:latest"
+          {{- else if eq .Values.database.type "mysql" }}
+          image: "bitnami/mysql:latest"
+          {{- end }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Waiting for database to be ready..."
+
+              {{- if eq .Values.database.type "postgresql" }}
+              # Wait for PostgreSQL to be ready
+              until PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; do
+                echo "PostgreSQL is not ready yet. Waiting..."
+                sleep 5
+              done
+              echo "PostgreSQL is ready."
+
+              # Check if schema already exists
+              TABLES_EXIST=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'guacamole_user');" 2>/dev/null || echo "f")
+
+              if [ "$TABLES_EXIST" = "t" ]; then
+                echo "Schema already exists."
+                {{- if .Values.database.init.recreate }}
+                echo "Recreate is enabled. Dropping existing schema..."
+                PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+                echo "Applying fresh schema..."
+                PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /schema/initdb.sql
+                {{- else }}
+                echo "Skipping schema initialization (already initialized)."
+                {{- end }}
+              else
+                echo "Applying database schema..."
+                PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /schema/initdb.sql
+                echo "Schema applied successfully."
+              fi
+              {{- else if eq .Values.database.type "mysql" }}
+              # Wait for MySQL to be ready
+              until mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "SELECT 1" 2>/dev/null; do
+                echo "MySQL is not ready yet. Waiting..."
+                sleep 5
+              done
+              echo "MySQL is ready."
+
+              # Check if schema already exists
+              TABLES_EXIST=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" -sNe "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'guacamole_user';" 2>/dev/null || echo "0")
+
+              if [ "$TABLES_EXIST" -gt 0 ]; then
+                echo "Schema already exists."
+                {{- if .Values.database.init.recreate }}
+                echo "Recreate is enabled. Dropping existing tables..."
+                mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" -e "SET FOREIGN_KEY_CHECKS = 0; DROP DATABASE $DB_NAME; CREATE DATABASE $DB_NAME; SET FOREIGN_KEY_CHECKS = 1;"
+                echo "Applying fresh schema..."
+                mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" < /schema/initdb.sql
+                {{- else }}
+                echo "Skipping schema initialization (already initialized)."
+                {{- end }}
+              else
+                echo "Applying database schema..."
+                mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" < /schema/initdb.sql
+                echo "Schema applied successfully."
+              fi
+              {{- end }}
+
+              echo "Database initialization completed."
+          env:
+            - name: DB_HOST
+              value: {{ include "guacamole.database.hostname" . | quote }}
+            - name: DB_PORT
+              value: {{ include "guacamole.database.port" . | quote }}
+            - name: DB_NAME
+              value: {{ include "guacamole.database.name" . | quote }}
+            - name: DB_USER
+              value: {{ include "guacamole.database.username" . | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole.database.secretName" . }}
+                  key: {{ include "guacamole.database.secretKey" . }}
+          volumeMounts:
+            - name: schema
+              mountPath: /schema
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.database.init.resources | nindent 12 }}
+      volumes:
+        - name: schema
+          emptyDir: {}
+{{- end }}

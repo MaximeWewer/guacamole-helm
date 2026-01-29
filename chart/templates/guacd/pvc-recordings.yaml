@@ -1,0 +1,18 @@
+{{- if and .Values.recording.enabled .Values.recording.persistence.enabled (not .Values.recording.persistence.existingClaim) -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "guacamole.guacd.fullname" . }}-recordings
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.guacd.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.recording.persistence.accessModes | nindent 4 }}
+  {{- if .Values.recording.persistence.storageClass }}
+  storageClassName: {{ .Values.recording.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.recording.persistence.size }}
+{{- end }}

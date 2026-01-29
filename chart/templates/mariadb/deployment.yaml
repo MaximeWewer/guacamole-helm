@@ -1,0 +1,206 @@
+{{- if and .Values.mariadb.enabled (not .Values.database.external.enabled) }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "guacamole.fullname" . }}-mariadb
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+  {{- with .Values.mariadb.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceName: {{ include "guacamole.fullname" . }}-mariadb
+  replicas: 1
+  {{- with .Values.mariadb.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "guacamole.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mariadb
+  template:
+    metadata:
+      labels:
+        {{- include "guacamole.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mariadb
+        {{- with .Values.mariadb.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.mariadb.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.mariadb.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.mariadb.priorityClassName }}
+      priorityClassName: {{ .Values.mariadb.priorityClassName | quote }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.mariadb.terminationGracePeriodSeconds | default 120 }}
+      {{- with .Values.mariadb.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mariadb.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mariadb
+          image: "{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
+          imagePullPolicy: {{ .Values.mariadb.image.pullPolicy | default "IfNotPresent" }}
+          {{- with .Values.mariadb.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: MARIADB_DATABASE
+              value: {{ .Values.mariadb.auth.database | quote }}
+            - name: MARIADB_USER
+              value: {{ .Values.mariadb.auth.username | quote }}
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole.fullname" . }}-mariadb
+                  key: password
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole.fullname" . }}-mariadb
+                  key: root-password
+            {{- with .Values.mariadb.extraEnvVars }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.mariadb.extraEnvFrom }}
+          envFrom:
+            {{- toYaml .Values.mariadb.extraEnvFrom | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: mariadb
+              containerPort: 3306
+              protocol: TCP
+          {{- if .Values.mariadb.startupProbe.enabled }}
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - mariadb-admin ping -u root -p"${MARIADB_ROOT_PASSWORD}"
+            initialDelaySeconds: {{ .Values.mariadb.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.mariadb.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.mariadb.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.mariadb.startupProbe.failureThreshold }}
+            successThreshold: {{ .Values.mariadb.startupProbe.successThreshold }}
+          {{- end }}
+          {{- if .Values.mariadb.livenessProbe.enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - mariadb-admin ping -u root -p"${MARIADB_ROOT_PASSWORD}"
+            initialDelaySeconds: {{ .Values.mariadb.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.mariadb.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.mariadb.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.mariadb.livenessProbe.failureThreshold }}
+            successThreshold: {{ .Values.mariadb.livenessProbe.successThreshold }}
+          {{- end }}
+          {{- if .Values.mariadb.readinessProbe.enabled }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - mariadb-admin ping -u root -p"${MARIADB_ROOT_PASSWORD}"
+            initialDelaySeconds: {{ .Values.mariadb.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.mariadb.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.mariadb.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.mariadb.readinessProbe.failureThreshold }}
+            successThreshold: {{ .Values.mariadb.readinessProbe.successThreshold }}
+          {{- end }}
+          {{- with .Values.mariadb.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            {{- if or .Values.mariadb.configuration .Values.mariadb.customConfigMap }}
+            - name: config
+              mountPath: /etc/mysql/conf.d
+            {{- end }}
+            {{- with .Values.mariadb.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      {{- with .Values.mariadb.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.mariadb.affinity .Values.mariadb.podAntiAffinityPreset }}
+      affinity:
+        {{- if .Values.mariadb.affinity }}
+        {{- toYaml .Values.mariadb.affinity | nindent 8 }}
+        {{- end }}
+        {{- if eq .Values.mariadb.podAntiAffinityPreset "hard" }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "guacamole.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: mariadb
+              topologyKey: kubernetes.io/hostname
+        {{- else if eq .Values.mariadb.podAntiAffinityPreset "soft" }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "guacamole.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: mariadb
+                topologyKey: kubernetes.io/hostname
+        {{- end }}
+      {{- end }}
+      {{- with .Values.mariadb.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- if or .Values.mariadb.configuration .Values.mariadb.customConfigMap }}
+        - name: config
+          configMap:
+            name: {{ .Values.mariadb.customConfigMap | default (printf "%s-mariadb-config" (include "guacamole.fullname" .)) }}
+        {{- end }}
+        {{- with .Values.mariadb.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  {{- if .Values.mariadb.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        {{- with .Values.mariadb.persistence.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          {{- range .Values.mariadb.persistence.accessModes }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- if .Values.mariadb.persistence.storageClass }}
+        storageClassName: {{ .Values.mariadb.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.mariadb.persistence.size | quote }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+{{- end }}

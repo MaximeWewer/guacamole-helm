@@ -1,0 +1,145 @@
+{{- if .Values.networkPolicy.enabled -}}
+---
+# NetworkPolicy for Guacamole client
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "guacamole.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.client.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "guacamole.client.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from Ingress controller
+    - from:
+        {{- if .Values.networkPolicy.ingressNamespaceSelector }}
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 12 }}
+        {{- end }}
+        {{- if .Values.networkPolicy.ingressPodSelector }}
+        - podSelector:
+            {{- toYaml .Values.networkPolicy.ingressPodSelector | nindent 12 }}
+        {{- end }}
+        {{- if not (or .Values.networkPolicy.ingressNamespaceSelector .Values.networkPolicy.ingressPodSelector) }}
+        # Default: allow from ingress-nginx namespace
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- with .Values.networkPolicy.extraIngressRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  egress:
+    # Allow to guacd
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "guacamole.guacd.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 4822
+    # Allow to database
+    - to:
+        {{- if .Values.postgresql.enabled }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+              app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- else }}
+        # External database - allow egress on database port
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ include "guacamole.database.port" . }}
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow HTTPS egress for SSO providers
+    {{- if or .Values.auth.oidc.enabled .Values.auth.saml.enabled }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+    {{- with .Values.networkPolicy.extraEgressRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+
+---
+# NetworkPolicy for guacd
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "guacamole.guacd.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.guacd.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "guacamole.guacd.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from guacamole client only
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "guacamole.client.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 4822
+  egress:
+    # Allow to remote targets (SSH, RDP, VNC, Telnet, Kubernetes)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 22    # SSH
+        - protocol: TCP
+          port: 3389  # RDP
+        - protocol: TCP
+          port: 5900  # VNC
+        - protocol: TCP
+          port: 5901  # VNC
+        - protocol: TCP
+          port: 5902  # VNC
+        - protocol: TCP
+          port: 23    # Telnet
+        - protocol: TCP
+          port: 8443  # Kubernetes API
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

@@ -1,0 +1,19 @@
+{{- if and .Values.mariadb.enabled (not .Values.database.external.enabled) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "guacamole.fullname" . }}-mariadb
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  type: {{ .Values.mariadb.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ .Values.mariadb.service.port | default 3306 }}
+      targetPort: mariadb
+      protocol: TCP
+      name: mariadb
+  selector:
+    {{- include "guacamole.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+{{- end }}

@@ -1,0 +1,12 @@
+{{- if and .Values.mysql.enabled (not .Values.database.external.enabled) .Values.mysql.configuration (not .Values.mysql.customConfigMap) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "guacamole.fullname" . }}-mysql-config
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql
+data:
+  custom.cnf: |
+    {{- .Values.mysql.configuration | nindent 4 }}
+{{- end }}

@@ -1,0 +1,119 @@
+{{- if .Values.guacd.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "guacamole.guacd.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.guacd.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.guacd.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "guacamole.guacd.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "guacamole.guacd.labels" . | nindent 8 }}
+      {{- with .Values.commonAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "guacamole.serviceAccountName" . }}
+      {{- with .Values.guacd.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.guacd.podSecurityContext | nindent 8 }}
+      {{- if .Values.guacd.dnsPolicy }}
+      dnsPolicy: {{ .Values.guacd.dnsPolicy }}
+      {{- end }}
+      {{- with .Values.guacd.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.guacd.terminationGracePeriodSeconds }}
+      containers:
+        - name: guacd
+          image: {{ include "guacamole.guacd.image" . }}
+          imagePullPolicy: {{ .Values.guacd.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.guacd.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: guacd
+              containerPort: 4822
+              protocol: TCP
+          env:
+            - name: GUACD_LOG_LEVEL
+              value: {{ .Values.guacd.logLevel | quote }}
+            {{- with .Values.guacd.extraEnvVars }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.guacd.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.guacd.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.guacd.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.guacd.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.recording.enabled }}
+            - name: recordings
+              mountPath: {{ .Values.recording.path }}
+            {{- end }}
+            {{- with .Values.guacd.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- if .Values.recording.enabled }}
+        - name: recordings
+          {{- if .Values.recording.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.recording.persistence.existingClaim | default (printf "%s-recordings" (include "guacamole.guacd.fullname" .)) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.guacd.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.guacd.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.guacd.affinity }}
+      affinity:
+        {{- toYaml .Values.guacd.affinity | nindent 8 }}
+      {{- else if and (ne .Values.guacd.podAntiAffinityPreset "none") (gt (int .Values.guacd.replicaCount) 1) }}
+      affinity:
+        podAntiAffinity:
+          {{- if eq .Values.guacd.podAntiAffinityPreset "hard" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "guacamole.guacd.selectorLabels" . | nindent 18 }}
+              topologyKey: kubernetes.io/hostname
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "guacamole.guacd.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+          {{- end }}
+      {{- end }}
+      {{- with .Values.guacd.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

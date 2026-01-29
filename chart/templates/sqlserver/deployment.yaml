@@ -1,0 +1,67 @@
+{{- if .Values.sqlserver.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "guacamole.fullname" . }}-sqlserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sqlserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "guacamole.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sqlserver
+  template:
+    metadata:
+      labels:
+        {{- include "guacamole.labels" . | nindent 8 }}
+        app.kubernetes.io/component: sqlserver
+    spec:
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: sqlserver
+          image: "{{ .Values.sqlserver.image.repository }}:{{ .Values.sqlserver.image.tag }}"
+          imagePullPolicy: {{ .Values.sqlserver.image.pullPolicy }}
+          ports:
+            - name: sqlserver
+              containerPort: 1433
+              protocol: TCP
+          env:
+            - name: MSSQL_PID
+              value: {{ .Values.sqlserver.edition | quote }}
+            - name: ACCEPT_EULA
+              value: {{ .Values.sqlserver.acceptEula | quote }}
+            - name: MSSQL_AGENT_ENABLED
+              value: {{ .Values.sqlserver.agentEnabled | quote }}
+            - name: SA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole.fullname" . }}-sqlserver
+                  key: sa-password
+          resources:
+            {{- toYaml .Values.sqlserver.resources | nindent 12 }}
+          {{- if .Values.sqlserver.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/opt/mssql
+          {{- end }}
+          livenessProbe:
+            tcpSocket:
+              port: sqlserver
+            initialDelaySeconds: 60
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: sqlserver
+            initialDelaySeconds: 30
+            periodSeconds: 5
+      {{- if .Values.sqlserver.persistence.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "guacamole.fullname" . }}-sqlserver-data
+      {{- end }}
+{{- end }}

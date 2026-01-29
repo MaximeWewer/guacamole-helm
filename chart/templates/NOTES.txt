@@ -1,0 +1,42 @@
+Guacamole has been installed successfully!
+
+{{- if .Values.ingress.enabled }}
+Access Guacamole at:
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else }}
+To access Guacamole, run:
+
+  kubectl port-forward svc/{{ include "guacamole.fullname" . }} {{ .Values.guacamole.service.port }}:{{ .Values.guacamole.service.port }} -n {{ .Release.Namespace }}
+
+Then open http://localhost:{{ .Values.guacamole.service.port }} in your browser.
+{{- end }}
+
+Default credentials:
+  Username: guacadmin
+  Password: guacadmin
+
+IMPORTANT: Change the default password immediately after first login!
+
+{{- if .Values.postgresql.enabled }}
+
+PostgreSQL has been deployed as a subchart.
+{{- else if .Values.database.external.enabled }}
+
+Using external database at: {{ .Values.database.external.hostname }}:{{ .Values.database.external.port }}
+{{- end }}
+
+{{- if .Values.recording.enabled }}
+
+Session recording is enabled. Recordings are stored at: {{ .Values.recording.path }}
+{{- if .Values.recording.persistence.enabled }}
+Persistent storage is configured.
+{{- else }}
+WARNING: Recording persistence is disabled. Recordings will be lost on pod restart.
+{{- end }}
+{{- end }}
+
+For more information, visit: https://guacamole.apache.org/doc/gug/

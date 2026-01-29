@@ -1,0 +1,380 @@
+{{- if .Values.guacamole.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "guacamole.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "guacamole.client.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.guacamole.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "guacamole.client.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "guacamole.client.labels" . | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.commonAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "guacamole.serviceAccountName" . }}
+      {{- with .Values.guacamole.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.guacamole.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.guacamole.terminationGracePeriodSeconds }}
+      {{- if .Values.database.init.enabled }}
+      initContainers:
+        # Generate and apply database schema
+        - name: db-init
+          image: {{ include "guacamole.image" . }}
+          imagePullPolicy: {{ .Values.guacamole.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Generating Guacamole database schema..."
+              {{- if eq .Values.database.type "postgresql" }}
+              /opt/guacamole/bin/initdb.sh --postgresql > /tmp/initdb.sql
+              {{- else if or (eq .Values.database.type "mysql") (eq .Values.database.type "mariadb") }}
+              /opt/guacamole/bin/initdb.sh --mysql > /tmp/initdb.sql
+              {{- else if eq .Values.database.type "sqlserver" }}
+              /opt/guacamole/bin/initdb.sh --sqlserver > /tmp/initdb.sql
+              {{- end }}
+              echo "Schema generated: $(wc -l < /tmp/initdb.sql) lines"
+              cp /tmp/initdb.sql /schema/initdb.sql
+          volumeMounts:
+            - name: schema
+              mountPath: /schema
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.database.init.resources | nindent 12 }}
+        - name: db-apply
+          {{- if eq .Values.database.type "postgresql" }}
+          image: "{{ .Values.database.init.clientImages.postgresql.repository }}:{{ .Values.database.init.clientImages.postgresql.tag }}"
+          {{- else if eq .Values.database.type "mysql" }}
+          image: "{{ .Values.database.init.clientImages.mysql.repository }}:{{ .Values.database.init.clientImages.mysql.tag }}"
+          {{- else if eq .Values.database.type "mariadb" }}
+          image: "{{ .Values.database.init.clientImages.mariadb.repository }}:{{ .Values.database.init.clientImages.mariadb.tag }}"
+          {{- else if eq .Values.database.type "sqlserver" }}
+          image: "{{ .Values.database.init.clientImages.sqlserver.repository }}:{{ .Values.database.init.clientImages.sqlserver.tag }}"
+          {{- end }}
+          imagePullPolicy: {{ .Values.database.init.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Waiting for database to be ready..."
+
+              {{- if eq .Values.database.type "postgresql" }}
+              # Wait for PostgreSQL
+              until PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; do
+                echo "PostgreSQL not ready, waiting..."
+                sleep 5
+              done
+              echo "PostgreSQL is ready."
+
+              # Check if schema exists
+              TABLES_EXIST=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'guacamole_user');" 2>/dev/null || echo "f")
+              if [ "$TABLES_EXIST" = "t" ]; then
+                echo "Schema already exists, skipping initialization."
+              else
+                echo "Applying database schema..."
+                PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /schema/initdb.sql
+                echo "Schema applied successfully."
+              fi
+              {{- else if eq .Values.database.type "mysql" }}
+              # Wait for MySQL
+              until mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "SELECT 1" 2>/dev/null; do
+                echo "MySQL not ready, waiting..."
+                sleep 5
+              done
+              echo "MySQL is ready."
+
+              # Check if schema exists
+              TABLES_EXIST=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" -sNe "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'guacamole_user';" 2>/dev/null || echo "0")
+              if [ "$TABLES_EXIST" -gt 0 ]; then
+                echo "Schema already exists, skipping initialization."
+              else
+                echo "Applying database schema..."
+                mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" < /schema/initdb.sql
+                echo "Schema applied successfully."
+              fi
+              {{- else if eq .Values.database.type "mariadb" }}
+              # Wait for MariaDB
+              until mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "SELECT 1" 2>/dev/null; do
+                echo "MariaDB not ready, waiting..."
+                sleep 5
+              done
+              echo "MariaDB is ready."
+
+              # Check if schema exists
+              TABLES_EXIST=$(mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" -sNe "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'guacamole_user';" 2>/dev/null || echo "0")
+              if [ "$TABLES_EXIST" -gt 0 ]; then
+                echo "Schema already exists, skipping initialization."
+              else
+                echo "Applying database schema..."
+                mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" < /schema/initdb.sql
+                echo "Schema applied successfully."
+              fi
+              {{- else if eq .Values.database.type "sqlserver" }}
+              # Wait for SQL Server using SA account (-C trusts server certificate)
+              until /opt/mssql-tools18/bin/sqlcmd -S "$DB_HOST,$DB_PORT" -U sa -P "$SA_PASSWORD" -C -Q "SELECT 1" 2>/dev/null; do
+                echo "SQL Server not ready, waiting..."
+                sleep 5
+              done
+              echo "SQL Server is ready."
+
+              # Create database if not exists
+              echo "Creating database if not exists..."
+              /opt/mssql-tools18/bin/sqlcmd -S "$DB_HOST,$DB_PORT" -U sa -P "$SA_PASSWORD" -C -Q "IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = '$DB_NAME') CREATE DATABASE [$DB_NAME]"
+
+              # Check if schema exists
+              TABLES_EXIST=$(/opt/mssql-tools18/bin/sqlcmd -S "$DB_HOST,$DB_PORT" -U sa -P "$SA_PASSWORD" -d "$DB_NAME" -C -h -1 -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'guacamole_user'" 2>/dev/null | tr -d ' ' || echo "0")
+              if [ "$TABLES_EXIST" -gt 0 ]; then
+                echo "Schema already exists, skipping initialization."
+              else
+                echo "Applying database schema..."
+                /opt/mssql-tools18/bin/sqlcmd -S "$DB_HOST,$DB_PORT" -U sa -P "$SA_PASSWORD" -d "$DB_NAME" -C -i /schema/initdb.sql
+                echo "Schema applied successfully."
+              fi
+              {{- end }}
+
+              echo "Database initialization completed."
+          env:
+            - name: DB_HOST
+              value: {{ include "guacamole.database.hostname" . | quote }}
+            - name: DB_PORT
+              value: {{ include "guacamole.database.port" . | quote }}
+            - name: DB_NAME
+              value: {{ include "guacamole.database.name" . | quote }}
+            - name: DB_USER
+              value: {{ include "guacamole.database.username" . | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole.database.secretName" . }}
+                  key: {{ include "guacamole.database.secretKey" . }}
+            {{- if eq .Values.database.type "sqlserver" }}
+            - name: SA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole.database.secretName" . }}
+                  key: sa-password
+            {{- end }}
+          volumeMounts:
+            - name: schema
+              mountPath: /schema
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.database.init.resources | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: guacamole
+          image: {{ include "guacamole.image" . }}
+          imagePullPolicy: {{ .Values.guacamole.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.guacamole.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            # Guacd connection
+            - name: GUACD_HOSTNAME
+              value: {{ include "guacamole.guacd.fullname" . }}
+            - name: GUACD_PORT
+              value: {{ .Values.guacd.service.port | quote }}
+            # Database connection
+            {{- if eq .Values.database.type "postgresql" }}
+            - name: POSTGRESQL_HOSTNAME
+              value: {{ include "guacamole.database.hostname" . }}
+            - name: POSTGRESQL_PORT
+              value: {{ include "guacamole.database.port" . | quote }}
+            - name: POSTGRESQL_DATABASE
+              value: {{ include "guacamole.database.name" . }}
+            - name: POSTGRESQL_USER
+              value: {{ include "guacamole.database.username" . }}
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole.database.secretName" . }}
+                  key: {{ include "guacamole.database.secretKey" . }}
+            {{- else if or (eq .Values.database.type "mysql") (eq .Values.database.type "mariadb") }}
+            - name: MYSQL_HOSTNAME
+              value: {{ include "guacamole.database.hostname" . }}
+            - name: MYSQL_PORT
+              value: {{ include "guacamole.database.port" . | quote }}
+            - name: MYSQL_DATABASE
+              value: {{ include "guacamole.database.name" . }}
+            - name: MYSQL_USER
+              value: {{ include "guacamole.database.username" . }}
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole.database.secretName" . }}
+                  key: {{ include "guacamole.database.secretKey" . }}
+            {{- else if eq .Values.database.type "sqlserver" }}
+            - name: SQLSERVER_HOSTNAME
+              value: {{ include "guacamole.database.hostname" . }}
+            - name: SQLSERVER_PORT
+              value: {{ include "guacamole.database.port" . | quote }}
+            - name: SQLSERVER_DATABASE
+              value: {{ include "guacamole.database.name" . }}
+            - name: SQLSERVER_USER
+              value: {{ include "guacamole.database.username" . }}
+            - name: SQLSERVER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "guacamole.database.secretName" . }}
+                  key: {{ include "guacamole.database.secretKey" . }}
+            {{- end }}
+            # Webapp context
+            - name: WEBAPP_CONTEXT
+              value: {{ .Values.guacamole.webappContext | quote }}
+            # Proxy settings
+            {{- if .Values.proxy.enabled }}
+            - name: REMOTE_IP_VALVE_ENABLED
+              value: "true"
+            - name: PROXY_ALLOWED_IPS_REGEX
+              value: {{ .Values.proxy.allowedIpsRegex | quote }}
+            - name: PROXY_IP_HEADER
+              value: {{ .Values.proxy.ipHeader | quote }}
+            - name: PROXY_PROTOCOL_HEADER
+              value: {{ .Values.proxy.protocolHeader | quote }}
+            {{- end }}
+            # SSO Configuration
+            {{- if .Values.auth.oidc.enabled }}
+            {{- include "guacamole.oidc.env" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.auth.ldap.enabled }}
+            {{- include "guacamole.ldap.env" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.auth.saml.enabled }}
+            {{- include "guacamole.saml.env" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.auth.totp.enabled }}
+            {{- include "guacamole.totp.env" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.auth.duo.enabled }}
+            {{- include "guacamole.duo.env" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.auth.radius.enabled }}
+            {{- include "guacamole.radius.env" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.auth.cas.enabled }}
+            {{- include "guacamole.cas.env" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.auth.json.enabled }}
+            {{- include "guacamole.json.env" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.auth.header.enabled }}
+            {{- include "guacamole.header.env" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.auth.ssl.enabled }}
+            {{- include "guacamole.ssl.env" . | nindent 12 }}
+            {{- end }}
+            # Vault/KSM Configuration
+            {{- if .Values.vault.ksm.enabled }}
+            {{- include "guacamole.ksm.env" . | nindent 12 }}
+            {{- end }}
+            # QuickConnect Configuration
+            {{- if .Values.quickConnect.enabled }}
+            {{- include "guacamole.quickconnect.env" . | nindent 12 }}
+            {{- end }}
+            # Recording Playback Configuration
+            {{- if .Values.recording.enabled }}
+            {{- include "guacamole.recording.env" . | nindent 12 }}
+            {{- end }}
+            # API & Session Configuration
+            {{- include "guacamole.api.env" . | nindent 12 }}
+            # Brute Force Protection
+            {{- if .Values.bruteForce.enabled }}
+            {{- include "guacamole.bruteforce.env" . | nindent 12 }}
+            {{- end }}
+            # Advanced Configuration
+            {{- include "guacamole.advanced.env" . | nindent 12 }}
+            # Extra environment variables
+            {{- with .Values.guacamole.extraEnvVars }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.guacamole.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.guacamole.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.guacamole.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.guacamole.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.guacamole.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.database.init.enabled }}
+        - name: schema
+          emptyDir: {}
+        {{- end }}
+        {{- with .Values.guacamole.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.guacamole.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.guacamole.affinity }}
+      affinity:
+        {{- toYaml .Values.guacamole.affinity | nindent 8 }}
+      {{- else if and (ne .Values.guacamole.podAntiAffinityPreset "none") (gt (int .Values.guacamole.replicaCount) 1) }}
+      affinity:
+        podAntiAffinity:
+          {{- if eq .Values.guacamole.podAntiAffinityPreset "hard" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "guacamole.client.selectorLabels" . | nindent 18 }}
+              topologyKey: kubernetes.io/hostname
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "guacamole.client.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+          {{- end }}
+      {{- end }}
+      {{- with .Values.guacamole.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
