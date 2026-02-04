@@ -1,0 +1,15 @@
+{{- if and .Values.mariadb.enabled (not .Values.database.external.enabled) }}
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Database
+metadata:
+  name: {{ include "guacamole.fullname" . }}-db
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  mariaDbRef:
+    name: {{ include "guacamole.fullname" . }}-mariadb
+  characterSet: utf8mb4
+  collate: utf8mb4_unicode_ci
+  name: {{ .Values.mariadb.auth.database }}
+{{- end }}

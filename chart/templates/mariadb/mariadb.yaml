@@ -1,0 +1,111 @@
+{{- if and .Values.mariadb.enabled (not .Values.database.external.enabled) }}
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: {{ include "guacamole.fullname" . }}-mariadb
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  rootPasswordSecretKeyRef:
+    name: {{ include "guacamole.fullname" . }}-mariadb-credentials
+    key: root-password
+
+  image: {{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}
+
+  replicas: {{ .Values.mariadb.replicas | default 1 }}
+
+  storage:
+    size: {{ .Values.mariadb.storage.size }}
+    {{- if .Values.mariadb.storage.storageClass }}
+    storageClassName: {{ .Values.mariadb.storage.storageClass }}
+    {{- end }}
+
+  {{- with .Values.mariadb.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+  {{- if .Values.mariadb.galera.enabled }}
+  galera:
+    enabled: true
+    primary:
+      automaticFailover: true
+    agent:
+      image: {{ .Values.mariadb.galera.agent.image | default "ghcr.io/mariadb-operator/mariadb-operator:v0.0.29" }}
+    recovery:
+      enabled: {{ .Values.mariadb.galera.recovery.enabled | default true }}
+      clusterHealthyTimeout: {{ .Values.mariadb.galera.recovery.clusterHealthyTimeout | default "3m" }}
+      clusterBootstrapTimeout: {{ .Values.mariadb.galera.recovery.clusterBootstrapTimeout | default "10m" }}
+      podRecoveryTimeout: {{ .Values.mariadb.galera.recovery.podRecoveryTimeout | default "5m" }}
+      podSyncTimeout: {{ .Values.mariadb.galera.recovery.podSyncTimeout | default "5m" }}
+  {{- end }}
+
+  {{- if and .Values.mariadb.replication.enabled (not .Values.mariadb.galera.enabled) }}
+  replication:
+    enabled: true
+    {{- if eq .Values.mariadb.replication.mode "semi-sync" }}
+    primary:
+      automaticFailover: true
+    replica:
+      waitPoint: AfterSync
+    {{- end }}
+  {{- end }}
+
+  {{- if .Values.mariadb.tls.enabled }}
+  tls:
+    enabled: true
+    {{- if .Values.mariadb.tls.existingSecret }}
+    caSecretKeyRef:
+      name: {{ .Values.mariadb.tls.existingSecret }}
+      key: ca.crt
+    certSecretKeyRef:
+      name: {{ .Values.mariadb.tls.existingSecret }}
+      key: tls.crt
+    keySecretKeyRef:
+      name: {{ .Values.mariadb.tls.existingSecret }}
+      key: tls.key
+    {{- end }}
+  {{- end }}
+
+  {{- if .Values.mariadb.metrics.enabled }}
+  metrics:
+    enabled: true
+    exporter:
+      image: {{ .Values.mariadb.metrics.image | default "prom/mysqld-exporter:v0.15.1" }}
+      {{- with .Values.mariadb.metrics.resources }}
+      resources:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- if .Values.mariadb.metrics.serviceMonitor.enabled }}
+    serviceMonitor:
+      prometheusRelease: prometheus
+    {{- end }}
+  {{- end }}
+
+  myCnf: |
+    [mariadb]
+    bind-address=*
+    default_storage_engine=InnoDB
+    binlog_format=row
+    innodb_autoinc_lock_mode=2
+    max_allowed_packet=256M
+    {{- if .Values.mariadb.myCnf }}
+    {{ .Values.mariadb.myCnf | nindent 4 }}
+    {{- end }}
+
+  {{- with .Values.mariadb.nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+  {{- with .Values.mariadb.tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+  {{- with .Values.mariadb.affinity }}
+  affinity:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

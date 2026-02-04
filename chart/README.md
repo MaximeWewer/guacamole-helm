@@ -1,31 +1,80 @@
-# Guacamole Helm Chart
+# guacamole
 
-A production-ready Helm chart for [Apache Guacamole](https://guacamole.apache.org/).
+![Version: 1.0.0](https://img.shields.io/badge/Version-1.0.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.6.0](https://img.shields.io/badge/AppVersion-1.6.0-informational?style=flat-square)
+
+A Helm chart for Apache Guacamole - clientless remote desktop gateway
+
+**Homepage:** <https://guacamole.apache.org/>
 
 ## TL;DR
 
 ```bash
+# Install the required operator first (CloudNative-PG for PostgreSQL)
+helm repo add cnpg https://cloudnative-pg.github.io/charts
+helm install cnpg cnpg/cloudnative-pg \
+  --namespace cnpg-system --create-namespace
+
+# Install the chart
 helm install guacamole . -n guacamole --create-namespace
 ```
 
 ## Introduction
 
-This chart deploys Apache Guacamole on a Kubernetes cluster using **official Docker images** (no Bitnami dependencies). It includes:
+This chart deploys [Apache Guacamole](https://guacamole.apache.org/) on a Kubernetes cluster. It uses **Kubernetes operators** for database management, providing production-grade features like high availability, automated backups, and TLS encryption.
 
-- Guacamole web application (`guacamole/guacamole`)
-- Guacd connection proxy (`guacamole/guacd`)
-- Database with embedded templates:
-  - PostgreSQL (`postgres`)
-  - MySQL (`mysql`)
-  - MariaDB (`mariadb`)
-  - SQL Server (`mcr.microsoft.com/mssql/server`)
-- Automatic schema initialization
+### Components
+
+- **Guacamole** - Web application (`guacamole/guacamole`)
+- **Guacd** - Connection proxy daemon (`guacamole/guacd`)
+- **Database** - Managed by Kubernetes operators:
+  - PostgreSQL via [CloudNative-PG](https://cloudnative-pg.io/)
+  - MySQL via [MySQL Operator](https://dev.mysql.com/doc/mysql-operator/en/)
+  - MariaDB via [MariaDB Operator](https://github.com/mariadb-operator/mariadb-operator)
+
+### Features
+
+- Kubernetes operator-based database management (HA, backups, TLS)
+- Automatic Guacamole schema initialization via Helm hooks
+- Comprehensive authentication (OIDC, SAML, LDAP, TOTP, Duo, RADIUS, CAS)
+- Session recording with playback support
+- Network policies and RBAC
+- Ingress with WebSocket support
 
 ## Prerequisites
 
 - Kubernetes 1.25+
 - Helm 3.x
-- PV provisioner support (for database and recordings persistence)
+- PV provisioner (for persistence)
+
+### Database Operators
+
+Install the operator for your chosen database **before** deploying this chart:
+
+#### CloudNative-PG (PostgreSQL) - Default
+
+```bash
+helm repo add cnpg https://cloudnative-pg.github.io/charts
+helm install cnpg cnpg/cloudnative-pg \
+  --namespace cnpg-system --create-namespace
+```
+
+#### MariaDB Operator
+
+```bash
+helm repo add mariadb-operator https://helm.mariadb.com/mariadb-operator
+helm install mariadb-operator-crds mariadb-operator/mariadb-operator-crds \
+  --namespace mariadb-operator --create-namespace
+helm install mariadb-operator mariadb-operator/mariadb-operator \
+  --namespace mariadb-operator
+```
+
+#### MySQL Operator
+
+```bash
+helm repo add mysql-operator https://mysql.github.io/mysql-operator/
+helm install mysql-operator mysql-operator/mysql-operator \
+  --namespace mysql-operator --create-namespace
+```
 
 ## Installing the Chart
 
@@ -37,619 +86,555 @@ helm install guacamole . -n guacamole --create-namespace
 
 ```bash
 helm uninstall guacamole -n guacamole
+
+# Remove PVCs if desired
+kubectl delete pvc -l app.kubernetes.io/instance=guacamole -n guacamole
 ```
+
+## Requirements
+
+Kubernetes: `>=1.25.0-0`
 
 ## Configuration
 
-### Global Parameters
+### Database Selection
 
-| Parameter           | Description                         | Default |
-| ------------------- | ----------------------------------- | ------- |
-| `nameOverride`      | Override chart name                 | `""`    |
-| `fullnameOverride`  | Override full name                  | `""`    |
-| `commonLabels`      | Labels to add to all resources      | `{}`    |
-| `commonAnnotations` | Annotations to add to all resources | `{}`    |
+| Database   | Operator         | CRD Created      | Values Key   |
+|------------|------------------|------------------|--------------|
+| PostgreSQL | CloudNative-PG   | `Cluster`        | `postgresql` |
+| MySQL      | MySQL Operator   | `InnoDBCluster`  | `mysql`      |
+| MariaDB    | MariaDB Operator | `MariaDB`        | `mariadb`    |
 
-### Guacamole Client Parameters
+Only enable **one** internal database at a time. For external databases, set all internal databases to `enabled: false` and configure `database.external`.
 
-| Parameter                                                     | Description                      | Default                |
-| ------------------------------------------------------------- | -------------------------------- | ---------------------- |
-| `guacamole.enabled`                                           | Enable Guacamole deployment      | `true`                 |
-| `guacamole.image.repository`                                  | Guacamole image repository       | `guacamole/guacamole`  |
-| `guacamole.image.tag`                                         | Guacamole image tag              | `""` (uses appVersion) |
-| `guacamole.image.pullPolicy`                                  | Image pull policy                | `IfNotPresent`         |
-| `guacamole.imagePullSecrets`                                  | Image pull secrets               | `[]`                   |
-| `guacamole.replicaCount`                                      | Number of replicas               | `1`                    |
-| `guacamole.webappContext`                                     | Webapp context path              | `ROOT`                 |
-| `guacamole.extraEnvVars`                                      | Additional environment variables | `[]`                   |
-| `guacamole.extraEnvFrom`                                      | Additional envFrom sources       | `[]`                   |
-| `guacamole.resources.requests.memory`                         | Memory request                   | `256Mi`                |
-| `guacamole.resources.requests.cpu`                            | CPU request                      | `250m`                 |
-| `guacamole.resources.limits.memory`                           | Memory limit                     | `512Mi`                |
-| `guacamole.resources.limits.cpu`                              | CPU limit                        | `500m`                 |
-| `guacamole.podSecurityContext.runAsNonRoot`                   | Run as non-root                  | `true`                 |
-| `guacamole.podSecurityContext.runAsUser`                      | Run as user ID                   | `1000`                 |
-| `guacamole.podSecurityContext.runAsGroup`                     | Run as group ID                  | `1000`                 |
-| `guacamole.podSecurityContext.fsGroup`                        | Filesystem group ID              | `1000`                 |
-| `guacamole.containerSecurityContext.allowPrivilegeEscalation` | Allow privilege escalation       | `false`                |
-| `guacamole.livenessProbe.initialDelaySeconds`                 | Liveness probe initial delay     | `60`                   |
-| `guacamole.livenessProbe.periodSeconds`                       | Liveness probe period            | `10`                   |
-| `guacamole.readinessProbe.initialDelaySeconds`                | Readiness probe initial delay    | `30`                   |
-| `guacamole.readinessProbe.periodSeconds`                      | Readiness probe period           | `5`                    |
-| `guacamole.nodeSelector`                                      | Node selector                    | `{}`                   |
-| `guacamole.tolerations`                                       | Tolerations                      | `[]`                   |
-| `guacamole.affinity`                                          | Affinity rules                   | `{}`                   |
-| `guacamole.podAntiAffinityPreset`                             | Pod anti-affinity preset         | `soft`                 |
-| `guacamole.extraVolumeMounts`                                 | Additional volume mounts         | `[]`                   |
-| `guacamole.extraVolumes`                                      | Additional volumes               | `[]`                   |
-| `guacamole.terminationGracePeriodSeconds`                     | Termination grace period         | `30`                   |
-| `guacamole.service.type`                                      | Service type                     | `ClusterIP`            |
-| `guacamole.service.port`                                      | Service port                     | `8080`                 |
-| `guacamole.service.annotations`                               | Service annotations              | `{}`                   |
-| `guacamole.pdb.enabled`                                       | Enable PodDisruptionBudget       | `false`                |
-| `guacamole.pdb.minAvailable`                                  | Minimum available pods           | `1`                    |
-| `guacamole.hpa.enabled`                                       | Enable HorizontalPodAutoscaler   | `false`                |
-| `guacamole.hpa.minReplicas`                                   | Minimum replicas                 | `2`                    |
-| `guacamole.hpa.maxReplicas`                                   | Maximum replicas                 | `10`                   |
-| `guacamole.hpa.targetCPUUtilizationPercentage`                | Target CPU utilization           | `80`                   |
-| `guacamole.hpa.targetMemoryUtilizationPercentage`             | Target memory utilization        | `80`                   |
+### Quick Examples
 
-### Guacd Parameters
-
-| Parameter                                               | Description                       | Default                |
-| ------------------------------------------------------- | --------------------------------- | ---------------------- |
-| `guacd.enabled`                                         | Enable guacd deployment           | `true`                 |
-| `guacd.image.repository`                                | Guacd image repository            | `guacamole/guacd`      |
-| `guacd.image.tag`                                       | Guacd image tag                   | `""` (uses appVersion) |
-| `guacd.image.pullPolicy`                                | Image pull policy                 | `IfNotPresent`         |
-| `guacd.imagePullSecrets`                                | Image pull secrets                | `[]`                   |
-| `guacd.replicaCount`                                    | Number of replicas                | `1`                    |
-| `guacd.logLevel`                                        | Log level                         | `info`                 |
-| `guacd.extraEnvVars`                                    | Additional environment variables  | `[]`                   |
-| `guacd.extraEnvFrom`                                    | Additional envFrom sources        | `[]`                   |
-| `guacd.resources.requests.memory`                       | Memory request                    | `256Mi`                |
-| `guacd.resources.requests.cpu`                          | CPU request                       | `250m`                 |
-| `guacd.resources.limits.memory`                         | Memory limit                      | `512Mi`                |
-| `guacd.resources.limits.cpu`                            | CPU limit                         | `500m`                 |
-| `guacd.podSecurityContext.runAsNonRoot`                 | Run as non-root                   | `true`                 |
-| `guacd.podSecurityContext.runAsUser`                    | Run as user ID                    | `1000`                 |
-| `guacd.containerSecurityContext.readOnlyRootFilesystem` | Read-only root filesystem         | `true`                 |
-| `guacd.dnsPolicy`                                       | DNS policy (Default for node DNS) | `""`                   |
-| `guacd.dnsConfig`                                       | Custom DNS configuration          | `{}`                   |
-| `guacd.nodeSelector`                                    | Node selector                     | `{}`                   |
-| `guacd.tolerations`                                     | Tolerations                       | `[]`                   |
-| `guacd.affinity`                                        | Affinity rules                    | `{}`                   |
-| `guacd.podAntiAffinityPreset`                           | Pod anti-affinity preset          | `soft`                 |
-| `guacd.extraVolumeMounts`                               | Additional volume mounts          | `[]`                   |
-| `guacd.extraVolumes`                                    | Additional volumes                | `[]`                   |
-| `guacd.terminationGracePeriodSeconds`                   | Termination grace period          | `30`                   |
-| `guacd.service.type`                                    | Service type                      | `ClusterIP`            |
-| `guacd.service.port`                                    | Service port                      | `4822`                 |
-| `guacd.service.annotations`                             | Service annotations               | `{}`                   |
-| `guacd.pdb.enabled`                                     | Enable PodDisruptionBudget        | `false`                |
-| `guacd.pdb.minAvailable`                                | Minimum available pods            | `1`                    |
-
-### Service Account & RBAC Parameters
-
-| Parameter                    | Description                 | Default |
-| ---------------------------- | --------------------------- | ------- |
-| `serviceAccount.create`      | Create service account      | `true`  |
-| `serviceAccount.annotations` | Service account annotations | `{}`    |
-| `serviceAccount.name`        | Service account name        | `""`    |
-| `rbac.create`                | Create RBAC resources       | `true`  |
-
-### Proxy Parameters
-
-| Parameter               | Description            | Default                          |
-| ----------------------- | ---------------------- | -------------------------------- |
-| `proxy.enabled`         | Enable remote IP valve | `true`                           |
-| `proxy.allowedIpsRegex` | Trusted proxy IP regex | `127\.0\.0\.1\|::1\|10\..*\|...` |
-| `proxy.ipHeader`        | IP header name         | `X-Forwarded-For`                |
-| `proxy.protocolHeader`  | Protocol header name   | `X-Forwarded-Proto`              |
-
-### Database Parameters
-
-| Parameter                                          | Description                                           | Default                               |
-| -------------------------------------------------- | ----------------------------------------------------- | ------------------------------------- |
-| `database.type`                                    | Database type (postgresql, mysql, mariadb, sqlserver) | `postgresql`                          |
-| `database.external.enabled`                        | Use external database                                 | `false`                               |
-| `database.external.hostname`                       | External database hostname                            | `""`                                  |
-| `database.external.port`                           | External database port                                | `5432`                                |
-| `database.external.database`                       | External database name                                | `guacamole`                           |
-| `database.external.username`                       | External database username                            | `guacamole`                           |
-| `database.external.password`                       | External database password                            | `""`                                  |
-| `database.external.existingSecret`                 | Existing secret for credentials                       | `""`                                  |
-| `database.external.existingSecretPasswordKey`      | Password key in secret                                | `password`                            |
-| `database.init.enabled`                            | Enable schema initialization                          | `true`                                |
-| `database.init.recreate`                           | Recreate schema on upgrade                            | `false`                               |
-| `database.init.image.repository`                   | Init image repository                                 | `guacamole/guacamole`                 |
-| `database.init.image.tag`                          | Init image tag                                        | `""`                                  |
-| `database.init.image.pullPolicy`                   | Init image pull policy                                | `IfNotPresent`                        |
-| `database.init.clientImages.postgresql.repository` | PostgreSQL client image                               | `postgresql`                          |
-| `database.init.clientImages.postgresql.tag`        | PostgreSQL client tag                                 | `18`                                  |
-| `database.init.clientImages.mysql.repository`      | MySQL client image                                    | `mysql`                               |
-| `database.init.clientImages.mysql.tag`             | MySQL client tag                                      | `9`                                   |
-| `database.init.clientImages.mariadb.repository`    | MariaDB client image                                  | `mariadb`                             |
-| `database.init.clientImages.mariadb.tag`           | MariaDB client tag                                    | `12`                                  |
-| `database.init.clientImages.sqlserver.repository`  | SQL Server client image                               | `mcr.microsoft.com/mssql/server`      |
-| `database.init.clientImages.sqlserver.tag`         | SQL Server client tag                                 | `2025-latest`                         |
-| `database.init.resources.requests.memory`          | Init memory request                                   | `128Mi`                               |
-| `database.init.resources.requests.cpu`             | Init CPU request                                      | `100m`                                |
-| `database.init.resources.limits.memory`            | Init memory limit                                     | `256Mi`                               |
-| `database.init.resources.limits.cpu`               | Init CPU limit                                        | `200m`                                |
-| `database.init.backoffLimit`                       | Init job backoff limit                                | `3`                                   |
-| `database.init.ttlSecondsAfterFinished`            | TTL after completion                                  | `300`                                 |
-| `database.init.useHooks`                           | Use Helm hooks                                        | `false`                               |
-| `database.init.hookWeight`                         | Hook weight                                           | `-5`                                  |
-| `database.init.hookDeletePolicy`                   | Hook delete policy                                    | `before-hook-creation,hook-succeeded` |
-
-### PostgreSQL Parameters (Official Docker Image)
-
-| Parameter                                                      | Description                          | Default           |
-| -------------------------------------------------------------- | ------------------------------------ | ----------------- |
-| `postgresql.enabled`                                           | Enable PostgreSQL                    | `true`            |
-| `postgresql.image.repository`                                  | Image repository                     | `postgres`        |
-| `postgresql.image.tag`                                         | Image tag                            | `18`              |
-| `postgresql.image.pullPolicy`                                  | Image pull policy                    | `IfNotPresent`    |
-| `postgresql.imagePullSecrets`                                  | Image pull secrets                   | `[]`              |
-| `postgresql.auth.database`                                     | Database name                        | `guacamole`       |
-| `postgresql.auth.username`                                     | Username                             | `guacamole`       |
-| `postgresql.auth.password`                                     | Password (auto-generated)            | `""`              |
-| `postgresql.auth.existingSecret`                               | Existing secret (key: password)      | `""`              |
-| `postgresql.service.type`                                      | Service type                         | `ClusterIP`       |
-| `postgresql.service.port`                                      | Service port                         | `5432`            |
-| `postgresql.persistence.enabled`                               | Enable persistence                   | `true`            |
-| `postgresql.persistence.size`                                  | Persistence size                     | `8Gi`             |
-| `postgresql.persistence.storageClass`                          | Storage class                        | `""`              |
-| `postgresql.persistence.accessModes`                           | Access modes                         | `[ReadWriteOnce]` |
-| `postgresql.persistence.annotations`                           | PVC annotations                      | `{}`              |
-| `postgresql.configuration`                                     | Custom postgresql.conf content       | `""`              |
-| `postgresql.customConfigMap`                                   | Existing ConfigMap for configuration | `""`              |
-| `postgresql.resources`                                         | Resources limits/requests            | `{}`              |
-| `postgresql.podSecurityContext.fsGroup`                        | Filesystem group ID                  | `999`             |
-| `postgresql.containerSecurityContext.runAsUser`                | Run as user ID                       | `999`             |
-| `postgresql.containerSecurityContext.runAsGroup`               | Run as group ID                      | `999`             |
-| `postgresql.containerSecurityContext.runAsNonRoot`             | Run as non-root                      | `true`            |
-| `postgresql.containerSecurityContext.allowPrivilegeEscalation` | Allow privilege escalation           | `false`           |
-| `postgresql.startupProbe.enabled`                              | Enable startup probe                 | `true`            |
-| `postgresql.startupProbe.initialDelaySeconds`                  | Initial delay                        | `30`              |
-| `postgresql.startupProbe.periodSeconds`                        | Period                               | `10`              |
-| `postgresql.startupProbe.timeoutSeconds`                       | Timeout                              | `5`               |
-| `postgresql.startupProbe.failureThreshold`                     | Failure threshold                    | `30`              |
-| `postgresql.startupProbe.successThreshold`                     | Success threshold                    | `1`               |
-| `postgresql.livenessProbe.enabled`                             | Enable liveness probe                | `true`            |
-| `postgresql.livenessProbe.initialDelaySeconds`                 | Initial delay                        | `30`              |
-| `postgresql.livenessProbe.periodSeconds`                       | Period                               | `10`              |
-| `postgresql.livenessProbe.timeoutSeconds`                      | Timeout                              | `5`               |
-| `postgresql.livenessProbe.failureThreshold`                    | Failure threshold                    | `6`               |
-| `postgresql.livenessProbe.successThreshold`                    | Success threshold                    | `1`               |
-| `postgresql.readinessProbe.enabled`                            | Enable readiness probe               | `true`            |
-| `postgresql.readinessProbe.initialDelaySeconds`                | Initial delay                        | `5`               |
-| `postgresql.readinessProbe.periodSeconds`                      | Period                               | `10`              |
-| `postgresql.readinessProbe.timeoutSeconds`                     | Timeout                              | `5`               |
-| `postgresql.readinessProbe.failureThreshold`                   | Failure threshold                    | `6`               |
-| `postgresql.readinessProbe.successThreshold`                   | Success threshold                    | `1`               |
-| `postgresql.terminationGracePeriodSeconds`                     | Termination grace period             | `120`             |
-| `postgresql.updateStrategy.type`                               | StatefulSet update strategy          | `RollingUpdate`   |
-| `postgresql.priorityClassName`                                 | Priority class name                  | `""`              |
-| `postgresql.nodeSelector`                                      | Node selector                        | `{}`              |
-| `postgresql.tolerations`                                       | Tolerations                          | `[]`              |
-| `postgresql.affinity`                                          | Affinity rules                       | `{}`              |
-| `postgresql.podAntiAffinityPreset`                             | Pod anti-affinity preset (soft/hard) | `""`              |
-| `postgresql.podAnnotations`                                    | Pod annotations                      | `{}`              |
-| `postgresql.podLabels`                                         | Pod labels                           | `{}`              |
-| `postgresql.annotations`                                       | StatefulSet annotations              | `{}`              |
-| `postgresql.extraEnvVars`                                      | Additional environment variables     | `[]`              |
-| `postgresql.extraEnvFrom`                                      | Additional envFrom sources           | `[]`              |
-| `postgresql.extraVolumeMounts`                                 | Additional volume mounts             | `[]`              |
-| `postgresql.extraVolumes`                                      | Additional volumes                   | `[]`              |
-| `postgresql.initContainers`                                    | Init containers                      | `[]`              |
-
-### MySQL Parameters (Official Docker Image)
-
-| Parameter                                                 | Description                                     | Default           |
-| --------------------------------------------------------- | ----------------------------------------------- | ----------------- |
-| `mysql.enabled`                                           | Enable MySQL                                    | `false`           |
-| `mysql.image.repository`                                  | Image repository                                | `mysql`           |
-| `mysql.image.tag`                                         | Image tag                                       | `9`               |
-| `mysql.image.pullPolicy`                                  | Image pull policy                               | `IfNotPresent`    |
-| `mysql.imagePullSecrets`                                  | Image pull secrets                              | `[]`              |
-| `mysql.auth.database`                                     | Database name                                   | `guacamole`       |
-| `mysql.auth.username`                                     | Username                                        | `guacamole`       |
-| `mysql.auth.password`                                     | Password (auto-generated)                       | `""`              |
-| `mysql.auth.rootPassword`                                 | Root password (auto-generated)                  | `""`              |
-| `mysql.auth.existingSecret`                               | Existing secret (keys: password, root-password) | `""`              |
-| `mysql.service.type`                                      | Service type                                    | `ClusterIP`       |
-| `mysql.service.port`                                      | Service port                                    | `3306`            |
-| `mysql.persistence.enabled`                               | Enable persistence                              | `true`            |
-| `mysql.persistence.size`                                  | Persistence size                                | `8Gi`             |
-| `mysql.persistence.storageClass`                          | Storage class                                   | `""`              |
-| `mysql.persistence.accessModes`                           | Access modes                                    | `[ReadWriteOnce]` |
-| `mysql.persistence.annotations`                           | PVC annotations                                 | `{}`              |
-| `mysql.configuration`                                     | Custom my.cnf content                           | `""`              |
-| `mysql.customConfigMap`                                   | Existing ConfigMap for configuration            | `""`              |
-| `mysql.resources`                                         | Resources limits/requests                       | `{}`              |
-| `mysql.podSecurityContext.fsGroup`                        | Filesystem group ID                             | `999`             |
-| `mysql.containerSecurityContext.runAsUser`                | Run as user ID                                  | `999`             |
-| `mysql.containerSecurityContext.runAsGroup`               | Run as group ID                                 | `999`             |
-| `mysql.containerSecurityContext.runAsNonRoot`             | Run as non-root                                 | `true`            |
-| `mysql.containerSecurityContext.allowPrivilegeEscalation` | Allow privilege escalation                      | `false`           |
-| `mysql.startupProbe.enabled`                              | Enable startup probe                            | `true`            |
-| `mysql.startupProbe.initialDelaySeconds`                  | Initial delay                                   | `30`              |
-| `mysql.startupProbe.periodSeconds`                        | Period                                          | `10`              |
-| `mysql.startupProbe.timeoutSeconds`                       | Timeout                                         | `5`               |
-| `mysql.startupProbe.failureThreshold`                     | Failure threshold                               | `30`              |
-| `mysql.startupProbe.successThreshold`                     | Success threshold                               | `1`               |
-| `mysql.livenessProbe.enabled`                             | Enable liveness probe                           | `true`            |
-| `mysql.livenessProbe.initialDelaySeconds`                 | Initial delay                                   | `30`              |
-| `mysql.livenessProbe.periodSeconds`                       | Period                                          | `10`              |
-| `mysql.livenessProbe.timeoutSeconds`                      | Timeout                                         | `5`               |
-| `mysql.livenessProbe.failureThreshold`                    | Failure threshold                               | `6`               |
-| `mysql.livenessProbe.successThreshold`                    | Success threshold                               | `1`               |
-| `mysql.readinessProbe.enabled`                            | Enable readiness probe                          | `true`            |
-| `mysql.readinessProbe.initialDelaySeconds`                | Initial delay                                   | `5`               |
-| `mysql.readinessProbe.periodSeconds`                      | Period                                          | `10`              |
-| `mysql.readinessProbe.timeoutSeconds`                     | Timeout                                         | `5`               |
-| `mysql.readinessProbe.failureThreshold`                   | Failure threshold                               | `6`               |
-| `mysql.readinessProbe.successThreshold`                   | Success threshold                               | `1`               |
-| `mysql.terminationGracePeriodSeconds`                     | Termination grace period                        | `120`             |
-| `mysql.updateStrategy.type`                               | StatefulSet update strategy                     | `RollingUpdate`   |
-| `mysql.priorityClassName`                                 | Priority class name                             | `""`              |
-| `mysql.nodeSelector`                                      | Node selector                                   | `{}`              |
-| `mysql.tolerations`                                       | Tolerations                                     | `[]`              |
-| `mysql.affinity`                                          | Affinity rules                                  | `{}`              |
-| `mysql.podAntiAffinityPreset`                             | Pod anti-affinity preset (soft/hard)            | `""`              |
-| `mysql.podAnnotations`                                    | Pod annotations                                 | `{}`              |
-| `mysql.podLabels`                                         | Pod labels                                      | `{}`              |
-| `mysql.annotations`                                       | StatefulSet annotations                         | `{}`              |
-| `mysql.extraEnvVars`                                      | Additional environment variables                | `[]`              |
-| `mysql.extraEnvFrom`                                      | Additional envFrom sources                      | `[]`              |
-| `mysql.extraVolumeMounts`                                 | Additional volume mounts                        | `[]`              |
-| `mysql.extraVolumes`                                      | Additional volumes                              | `[]`              |
-| `mysql.initContainers`                                    | Init containers                                 | `[]`              |
-
-### MariaDB Parameters (Official Docker Image)
-
-| Parameter                                                   | Description                                     | Default           |
-| ----------------------------------------------------------- | ----------------------------------------------- | ----------------- |
-| `mariadb.enabled`                                           | Enable MariaDB                                  | `false`           |
-| `mariadb.image.repository`                                  | Image repository                                | `mariadb`         |
-| `mariadb.image.tag`                                         | Image tag                                       | `12`              |
-| `mariadb.image.pullPolicy`                                  | Image pull policy                               | `IfNotPresent`    |
-| `mariadb.imagePullSecrets`                                  | Image pull secrets                              | `[]`              |
-| `mariadb.auth.database`                                     | Database name                                   | `guacamole`       |
-| `mariadb.auth.username`                                     | Username                                        | `guacamole`       |
-| `mariadb.auth.password`                                     | Password (auto-generated)                       | `""`              |
-| `mariadb.auth.rootPassword`                                 | Root password (auto-generated)                  | `""`              |
-| `mariadb.auth.existingSecret`                               | Existing secret (keys: password, root-password) | `""`              |
-| `mariadb.service.type`                                      | Service type                                    | `ClusterIP`       |
-| `mariadb.service.port`                                      | Service port                                    | `3306`            |
-| `mariadb.persistence.enabled`                               | Enable persistence                              | `true`            |
-| `mariadb.persistence.size`                                  | Persistence size                                | `8Gi`             |
-| `mariadb.persistence.storageClass`                          | Storage class                                   | `""`              |
-| `mariadb.persistence.accessModes`                           | Access modes                                    | `[ReadWriteOnce]` |
-| `mariadb.persistence.annotations`                           | PVC annotations                                 | `{}`              |
-| `mariadb.configuration`                                     | Custom my.cnf content                           | `""`              |
-| `mariadb.customConfigMap`                                   | Existing ConfigMap for configuration            | `""`              |
-| `mariadb.resources`                                         | Resources limits/requests                       | `{}`              |
-| `mariadb.podSecurityContext.fsGroup`                        | Filesystem group ID                             | `999`             |
-| `mariadb.containerSecurityContext.runAsUser`                | Run as user ID                                  | `999`             |
-| `mariadb.containerSecurityContext.runAsGroup`               | Run as group ID                                 | `999`             |
-| `mariadb.containerSecurityContext.runAsNonRoot`             | Run as non-root                                 | `true`            |
-| `mariadb.containerSecurityContext.allowPrivilegeEscalation` | Allow privilege escalation                      | `false`           |
-| `mariadb.startupProbe.enabled`                              | Enable startup probe                            | `true`            |
-| `mariadb.startupProbe.initialDelaySeconds`                  | Initial delay                                   | `30`              |
-| `mariadb.startupProbe.periodSeconds`                        | Period                                          | `10`              |
-| `mariadb.startupProbe.timeoutSeconds`                       | Timeout                                         | `5`               |
-| `mariadb.startupProbe.failureThreshold`                     | Failure threshold                               | `30`              |
-| `mariadb.startupProbe.successThreshold`                     | Success threshold                               | `1`               |
-| `mariadb.livenessProbe.enabled`                             | Enable liveness probe                           | `true`            |
-| `mariadb.livenessProbe.initialDelaySeconds`                 | Initial delay                                   | `30`              |
-| `mariadb.livenessProbe.periodSeconds`                       | Period                                          | `10`              |
-| `mariadb.livenessProbe.timeoutSeconds`                      | Timeout                                         | `5`               |
-| `mariadb.livenessProbe.failureThreshold`                    | Failure threshold                               | `6`               |
-| `mariadb.livenessProbe.successThreshold`                    | Success threshold                               | `1`               |
-| `mariadb.readinessProbe.enabled`                            | Enable readiness probe                          | `true`            |
-| `mariadb.readinessProbe.initialDelaySeconds`                | Initial delay                                   | `5`               |
-| `mariadb.readinessProbe.periodSeconds`                      | Period                                          | `10`              |
-| `mariadb.readinessProbe.timeoutSeconds`                     | Timeout                                         | `5`               |
-| `mariadb.readinessProbe.failureThreshold`                   | Failure threshold                               | `6`               |
-| `mariadb.readinessProbe.successThreshold`                   | Success threshold                               | `1`               |
-| `mariadb.terminationGracePeriodSeconds`                     | Termination grace period                        | `120`             |
-| `mariadb.updateStrategy.type`                               | StatefulSet update strategy                     | `RollingUpdate`   |
-| `mariadb.priorityClassName`                                 | Priority class name                             | `""`              |
-| `mariadb.nodeSelector`                                      | Node selector                                   | `{}`              |
-| `mariadb.tolerations`                                       | Tolerations                                     | `[]`              |
-| `mariadb.affinity`                                          | Affinity rules                                  | `{}`              |
-| `mariadb.podAntiAffinityPreset`                             | Pod anti-affinity preset (soft/hard)            | `""`              |
-| `mariadb.podAnnotations`                                    | Pod annotations                                 | `{}`              |
-| `mariadb.podLabels`                                         | Pod labels                                      | `{}`              |
-| `mariadb.annotations`                                       | StatefulSet annotations                         | `{}`              |
-| `mariadb.extraEnvVars`                                      | Additional environment variables                | `[]`              |
-| `mariadb.extraEnvFrom`                                      | Additional envFrom sources                      | `[]`              |
-| `mariadb.extraVolumeMounts`                                 | Additional volume mounts                        | `[]`              |
-| `mariadb.extraVolumes`                                      | Additional volumes                              | `[]`              |
-| `mariadb.initContainers`                                    | Init containers                                 | `[]`              |
-
-### SQL Server Parameters (Official Microsoft Image)
-
-| Parameter                             | Description        | Default                          |
-| ------------------------------------- | ------------------ | -------------------------------- |
-| `sqlserver.enabled`                   | Enable SQL Server  | `false`                          |
-| `sqlserver.image.repository`          | Image repository   | `mcr.microsoft.com/mssql/server` |
-| `sqlserver.image.tag`                 | Image tag          | `2025-latest`                    |
-| `sqlserver.image.pullPolicy`          | Image pull policy  | `IfNotPresent`                   |
-| `sqlserver.edition`                   | SQL Server edition | `Developer`                      |
-| `sqlserver.acceptEula`                | Accept EULA        | `Y`                              |
-| `sqlserver.agentEnabled`              | Enable SQL Agent   | `true`                           |
-| `sqlserver.auth.saPassword`           | SA password        | `""`                             |
-| `sqlserver.auth.database`             | Database name      | `guacamole`                      |
-| `sqlserver.auth.username`             | Username           | `guacamole`                      |
-| `sqlserver.auth.password`             | Password           | `""`                             |
-| `sqlserver.auth.existingSecret`       | Existing secret    | `""`                             |
-| `sqlserver.service.type`              | Service type       | `ClusterIP`                      |
-| `sqlserver.service.port`              | Service port       | `1433`                           |
-| `sqlserver.persistence.enabled`       | Enable persistence | `true`                           |
-| `sqlserver.persistence.size`          | Persistence size   | `8Gi`                            |
-| `sqlserver.persistence.storageClass`  | Storage class      | `""`                             |
-| `sqlserver.resources.requests.memory` | Memory request     | `2Gi`                            |
-| `sqlserver.resources.requests.cpu`    | CPU request        | `500m`                           |
-| `sqlserver.resources.limits.memory`   | Memory limit       | `4Gi`                            |
-| `sqlserver.resources.limits.cpu`      | CPU limit          | `2000m`                          |
-
-### LDAP Authentication Parameters
-
-| Parameter                      | Description                      | Default |
-| ------------------------------ | -------------------------------- | ------- |
-| `auth.ldap.enabled`            | Enable LDAP authentication       | `false` |
-| `auth.ldap.hostname`           | LDAP server hostname             | `""`    |
-| `auth.ldap.port`               | LDAP server port                 | `389`   |
-| `auth.ldap.encryption`         | Encryption (none, ssl, starttls) | `none`  |
-| `auth.ldap.userBaseDn`         | User base DN                     | `""`    |
-| `auth.ldap.usernameAttribute`  | Username attribute               | `uid`   |
-| `auth.ldap.searchBindDn`       | Search bind DN                   | `""`    |
-| `auth.ldap.searchBindPassword` | Search bind password             | `""`    |
-| `auth.ldap.existingSecret`     | Existing secret                  | `""`    |
-| `auth.ldap.extraConfig`        | Additional LDAP config           | `{}`    |
-
-### OIDC Authentication Parameters
-
-| Parameter                         | Description                | Default                |
-| --------------------------------- | -------------------------- | ---------------------- |
-| `auth.oidc.enabled`               | Enable OIDC authentication | `false`                |
-| `auth.oidc.authorizationEndpoint` | Authorization endpoint URL | `""`                   |
-| `auth.oidc.issuer`                | Issuer URL                 | `""`                   |
-| `auth.oidc.jwksEndpoint`          | JWKS endpoint URL          | `""`                   |
-| `auth.oidc.clientId`              | Client ID                  | `""`                   |
-| `auth.oidc.clientSecret`          | Client secret              | `""`                   |
-| `auth.oidc.existingSecret`        | Existing secret            | `""`                   |
-| `auth.oidc.redirectUri`           | Redirect URI               | `""`                   |
-| `auth.oidc.scope`                 | Scopes                     | `openid profile email` |
-| `auth.oidc.usernameClaim`         | Username claim             | `preferred_username`   |
-| `auth.oidc.extraConfig`           | Additional OIDC config     | `{}`                   |
-
-### SAML Authentication Parameters
-
-| Parameter                  | Description                | Default |
-| -------------------------- | -------------------------- | ------- |
-| `auth.saml.enabled`        | Enable SAML authentication | `false` |
-| `auth.saml.idpMetadataUrl` | IdP metadata URL           | `""`    |
-| `auth.saml.entityId`       | Entity ID                  | `""`    |
-| `auth.saml.callbackUrl`    | Callback URL               | `""`    |
-| `auth.saml.existingSecret` | Existing secret            | `""`    |
-| `auth.saml.extraConfig`    | Additional SAML config     | `{}`    |
-
-### TOTP Authentication Parameters
-
-| Parameter             | Description               | Default            |
-| --------------------- | ------------------------- | ------------------ |
-| `auth.totp.enabled`   | Enable TOTP               | `false`            |
-| `auth.totp.issuer`    | Issuer name               | `Apache Guacamole` |
-| `auth.totp.keyLength` | Key length (16, 24, 32)   | `32`               |
-| `auth.totp.mode`      | Mode (required, optional) | `optional`         |
-
-### Duo Authentication Parameters
-
-| Parameter                 | Description            | Default |
-| ------------------------- | ---------------------- | ------- |
-| `auth.duo.enabled`        | Enable Duo 2FA         | `false` |
-| `auth.duo.apiHostname`    | Duo API hostname       | `""`    |
-| `auth.duo.clientId`       | Duo client ID          | `""`    |
-| `auth.duo.clientSecret`   | Duo client secret      | `""`    |
-| `auth.duo.existingSecret` | Existing secret        | `""`    |
-| `auth.duo.redirectUri`    | Redirect URI           | `""`    |
-| `auth.duo.authTimeout`    | Auth timeout (minutes) | `5`     |
-| `auth.duo.bypassHosts`    | IPs to bypass Duo      | `""`    |
-| `auth.duo.enforceHosts`   | IPs that must use Duo  | `""`    |
-
-### RADIUS Authentication Parameters
-
-| Parameter                          | Description             | Default     |
-| ---------------------------------- | ----------------------- | ----------- |
-| `auth.radius.enabled`              | Enable RADIUS           | `false`     |
-| `auth.radius.hostname`             | RADIUS server hostname  | `localhost` |
-| `auth.radius.authPort`             | RADIUS auth port        | `1812`      |
-| `auth.radius.sharedSecret`         | Shared secret           | `""`        |
-| `auth.radius.existingSecret`       | Existing secret         | `""`        |
-| `auth.radius.authProtocol`         | Auth protocol           | `pap`       |
-| `auth.radius.retries`              | Connection retries      | `5`         |
-| `auth.radius.timeout`              | Timeout (seconds)       | `60`        |
-| `auth.radius.trustAll`             | Trust all certificates  | `false`     |
-| `auth.radius.nasIp`                | NAS IP                  | `""`        |
-| `auth.radius.eapTtlsInnerProtocol` | EAP-TTLS inner protocol | `""`        |
-| `auth.radius.keyFile`              | Client key file         | `""`        |
-| `auth.radius.keyType`              | Key file type           | `""`        |
-| `auth.radius.keyPassword`          | Key file password       | `""`        |
-| `auth.radius.caFile`               | CA file                 | `""`        |
-| `auth.radius.caType`               | CA file type            | `""`        |
-| `auth.radius.caPassword`           | CA file password        | `""`        |
-
-### CAS Authentication Parameters
-
-| Parameter                        | Description                | Default |
-| -------------------------------- | -------------------------- | ------- |
-| `auth.cas.enabled`               | Enable CAS                 | `false` |
-| `auth.cas.authorizationEndpoint` | CAS authorization endpoint | `""`    |
-| `auth.cas.redirectUri`           | Redirect URI               | `""`    |
-| `auth.cas.clearpassKey`          | ClearPass key path         | `""`    |
-| `auth.cas.groupAttribute`        | Group attribute            | `""`    |
-| `auth.cas.groupFormat`           | Group format (plain, ldap) | `plain` |
-| `auth.cas.groupLdapBaseDn`       | LDAP base DN               | `""`    |
-| `auth.cas.groupLdapAttribute`    | LDAP attribute             | `""`    |
-
-### JSON Authentication Parameters
-
-| Parameter                  | Description                       | Default |
-| -------------------------- | --------------------------------- | ------- |
-| `auth.json.enabled`        | Enable JSON auth                  | `false` |
-| `auth.json.secretKey`      | 128-bit secret key (32 hex chars) | `""`    |
-| `auth.json.existingSecret` | Existing secret                   | `""`    |
-
-### HTTP Header Authentication Parameters
-
-| Parameter                    | Description        | Default       |
-| ---------------------------- | ------------------ | ------------- |
-| `auth.header.enabled`        | Enable header auth | `false`       |
-| `auth.header.httpAuthHeader` | HTTP header name   | `REMOTE_USER` |
-
-### SSL/Certificate Authentication Parameters
-
-| Parameter                           | Description               | Default                |
-| ----------------------------------- | ------------------------- | ---------------------- |
-| `auth.ssl.enabled`                  | Enable SSL auth           | `false`                |
-| `auth.ssl.authUri`                  | URI requiring client cert | `""`                   |
-| `auth.ssl.primaryUri`               | URI without client cert   | `""`                   |
-| `auth.ssl.clientCertificateHeader`  | Client cert header        | `X-Client-Certificate` |
-| `auth.ssl.clientVerifiedHeader`     | Client verified header    | `X-Client-Verified`    |
-| `auth.ssl.maxTokenValidity`         | Token validity (minutes)  | `5`                    |
-| `auth.ssl.subjectUsernameAttribute` | Username attribute        | `""`                   |
-| `auth.ssl.subjectBaseDn`            | Subject base DN           | `""`                   |
-| `auth.ssl.maxDomainValidity`        | Domain validity (minutes) | `5`                    |
-
-### Vault / KSM Parameters
-
-| Parameter                       | Description               | Default |
-| ------------------------------- | ------------------------- | ------- |
-| `vault.ksm.enabled`             | Enable KSM integration    | `false` |
-| `vault.ksm.config`              | Base64-encoded KSM config | `""`    |
-| `vault.ksm.existingSecret`      | Existing secret           | `""`    |
-| `vault.ksm.allowUserConfig`     | Allow user KSM config     | `false` |
-| `vault.ksm.allowUnverifiedCert` | Allow unverified certs    | `false` |
-| `vault.ksm.apiCallInterval`     | API call interval (ms)    | `""`    |
-| `vault.ksm.stripWindowsDomains` | Strip Windows domains     | `false` |
-
-### QuickConnect Parameters
-
-| Parameter                        | Description         | Default |
-| -------------------------------- | ------------------- | ------- |
-| `quickConnect.enabled`           | Enable QuickConnect | `false` |
-| `quickConnect.allowedParameters` | Allowed parameters  | `""`    |
-| `quickConnect.deniedParameters`  | Denied parameters   | `""`    |
-
-### Recording Parameters
-
-| Parameter                             | Description              | Default           |
-| ------------------------------------- | ------------------------ | ----------------- |
-| `recording.enabled`                   | Enable session recording | `false`           |
-| `recording.path`                      | Recording path           | `/recordings`     |
-| `recording.createRecordingIndex`      | Create search index      | `true`            |
-| `recording.playback.enabled`          | Enable playback          | `false`           |
-| `recording.playback.searchPath`       | Playback search path     | `/recordings`     |
-| `recording.persistence.enabled`       | Enable persistence       | `false`           |
-| `recording.persistence.size`          | Storage size             | `10Gi`            |
-| `recording.persistence.storageClass`  | Storage class            | `""`              |
-| `recording.persistence.accessModes`   | Access modes             | `[ReadWriteOnce]` |
-| `recording.persistence.existingClaim` | Existing PVC             | `""`              |
-
-### Ingress Parameters
-
-| Parameter             | Description         | Default         |
-| --------------------- | ------------------- | --------------- |
-| `ingress.enabled`     | Enable Ingress      | `false`         |
-| `ingress.className`   | Ingress class name  | `""`            |
-| `ingress.annotations` | Ingress annotations | `{}`            |
-| `ingress.hosts`       | Ingress hosts       | See values.yaml |
-| `ingress.tls`         | Ingress TLS config  | `[]`            |
-
-### Network Policy Parameters
-
-| Parameter                                | Description                | Default |
-| ---------------------------------------- | -------------------------- | ------- |
-| `networkPolicy.enabled`                  | Enable network policies    | `false` |
-| `networkPolicy.ingressNamespaceSelector` | Ingress namespace selector | `{}`    |
-| `networkPolicy.ingressPodSelector`       | Ingress pod selector       | `{}`    |
-| `networkPolicy.extraIngressRules`        | Additional ingress rules   | `[]`    |
-| `networkPolicy.extraEgressRules`         | Additional egress rules    | `[]`    |
-
-### Logging Parameters
-
-| Parameter                 | Description         | Default |
-| ------------------------- | ------------------- | ------- |
-| `logging.guacamole.level` | Guacamole log level | `info`  |
-| `logging.guacd.level`     | Guacd log level     | `info`  |
-
-### API & Session Parameters
-
-| Parameter                           | Description               | Default |
-| ----------------------------------- | ------------------------- | ------- |
-| `api.session.timeout`               | Session timeout (minutes) | `60`    |
-| `api.session.maxConnectionsPerUser` | Max connections per user  | `0`     |
-| `api.session.maxConnections`        | Max total connections     | `0`     |
-
-### Brute Force Protection Parameters
-
-| Parameter                    | Description                   | Default |
-| ---------------------------- | ----------------------------- | ------- |
-| `bruteForce.enabled`         | Enable brute force protection | `true`  |
-| `bruteForce.maxAttempts`     | Max failed attempts           | `5`     |
-| `bruteForce.lockoutDuration` | Lockout duration (minutes)    | `15`    |
-| `bruteForce.attemptWindow`   | Attempt window (minutes)      | `5`     |
-
-### Extensions Parameters
-
-| Parameter                      | Description              | Default |
-| ------------------------------ | ------------------------ | ------- |
-| `extensions.enabled`           | Enable custom extensions | `false` |
-| `extensions.list`              | List of extensions       | `[]`    |
-| `extensions.extraVolumeMounts` | Extra volume mounts      | `[]`    |
-| `extensions.extraVolumes`      | Extra volumes            | `[]`    |
-
-### Advanced Parameters
-
-| Parameter                           | Description                 | Default          |
-| ----------------------------------- | --------------------------- | ---------------- |
-| `advanced.guacamoleHome`            | GUACAMOLE_HOME directory    | `/etc/guacamole` |
-| `advanced.skipSchemaCreation`       | Skip schema creation        | `false`          |
-| `advanced.allowedFilePaths`         | Allowed file transfer paths | `""`             |
-| `advanced.websocket.enabled`        | Enable WebSocket            | `true`           |
-| `advanced.tomcat.maxThreads`        | Tomcat max threads          | `200`            |
-| `advanced.tomcat.connectionTimeout` | Connection timeout (ms)     | `20000`          |
-
-## Examples
-
-### Basic PostgreSQL
+#### PostgreSQL with HA
 
 ```yaml
 postgresql:
   enabled: true
+  instances: 3
+  ha:
+    enabled: true
+    minSyncReplicas: 1
   auth:
     password: "secure-password"
 ```
 
-### MySQL with OIDC
+#### MySQL InnoDB Cluster
 
 ```yaml
-database:
-  type: mysql
-
 postgresql:
   enabled: false
-
 mysql:
   enabled: true
+  instances: 3
   auth:
-    password: "mysql-password"
+    password: "secure-password"
     rootPassword: "root-password"
+```
+
+#### MariaDB with Galera
+
+```yaml
+postgresql:
+  enabled: false
+mariadb:
+  enabled: true
+  replicas: 3
+  galera:
+    enabled: true
+  auth:
+    password: "secure-password"
+    rootPassword: "root-password"
+```
+
+#### External Database
+
+```yaml
+postgresql:
+  enabled: false
+database:
+  type: postgresql  # postgresql, mysql, mariadb, sqlserver
+  external:
+    enabled: true
+    hostname: "db.example.com"
+    port: 5432
+    database: guacamole
+    username: guacamole
+    existingSecret: db-credentials
+```
+
+> **Note**: SQL Server is only supported as an external database.
+
+## Values
+
+### Global
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| commonAnnotations | object | `{}` | Common annotations to add to all resources |
+| commonLabels | object | `{}` | Common labels to add to all resources |
+| fullnameOverride | string | `""` | Override full name |
+| nameOverride | string | `""` | Override chart name |
+
+### Guacamole Client
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| guacamole.affinity | object | `{}` | Affinity rules |
+| guacamole.containerSecurityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}` | Container security context |
+| guacamole.enabled | bool | `true` | Enable guacamole deployment |
+| guacamole.extraEnvFrom | list | `[]` | Additional environment variables from ConfigMap/Secret |
+| guacamole.extraEnvVars | list | `[]` | Additional environment variables |
+| guacamole.extraVolumeMounts | list | `[]` | Additional volume mounts |
+| guacamole.extraVolumes | list | `[]` | Additional volumes |
+| guacamole.hpa.enabled | bool | `false` | Enable HorizontalPodAutoscaler |
+| guacamole.hpa.maxReplicas | int | `10` | Maximum replicas |
+| guacamole.hpa.minReplicas | int | `2` | Minimum replicas |
+| guacamole.hpa.targetCPUUtilizationPercentage | int | `80` | Target CPU utilization percentage |
+| guacamole.hpa.targetMemoryUtilizationPercentage | int | `80` | Target memory utilization percentage |
+| guacamole.image.pullPolicy | string | `"IfNotPresent"` | Image pull policy |
+| guacamole.image.repository | string | `"guacamole/guacamole"` | Guacamole image repository |
+| guacamole.image.tag | string | `""` | Guacamole image tag (defaults to appVersion) |
+| guacamole.imagePullSecrets | list | `[]` | Image pull secrets |
+| guacamole.livenessProbe | object | `{"failureThreshold":3,"httpGet":{"path":"/","port":"http"},"initialDelaySeconds":60,"periodSeconds":10,"timeoutSeconds":5}` | Liveness probe configuration |
+| guacamole.nodeSelector | object | `{}` | Node selector |
+| guacamole.pdb.enabled | bool | `false` | Enable PodDisruptionBudget |
+| guacamole.pdb.minAvailable | int | `1` | Minimum available pods |
+| guacamole.podAntiAffinityPreset | string | `"soft"` | Pod anti-affinity preset (soft/hard/none) |
+| guacamole.podSecurityContext | object | `{"fsGroup":1000,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000}` | Pod security context |
+| guacamole.readinessProbe | object | `{"failureThreshold":3,"httpGet":{"path":"/","port":"http"},"initialDelaySeconds":30,"periodSeconds":5,"timeoutSeconds":3}` | Readiness probe configuration |
+| guacamole.replicaCount | int | `1` | Number of replicas |
+| guacamole.resources | object | `{"limits":{"cpu":"500m","memory":"512Mi"},"requests":{"cpu":"250m","memory":"256Mi"}}` | Resource requests and limits |
+| guacamole.service.annotations | object | `{}` | Service annotations |
+| guacamole.service.port | int | `8080` | Service port |
+| guacamole.service.type | string | `"ClusterIP"` | Service type |
+| guacamole.terminationGracePeriodSeconds | int | `30` | Termination grace period |
+| guacamole.tolerations | list | `[]` | Tolerations |
+| guacamole.webappContext | string | `"ROOT"` | Webapp context path (use ROOT for /) |
+
+### Guacd (Connection Proxy)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| guacd.affinity | object | `{}` | Affinity rules |
+| guacd.containerSecurityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true}` | Container security context |
+| guacd.dnsConfig | object | `{}` | Custom DNS configuration |
+| guacd.dnsPolicy | string | `""` | DNS Policy for guacd pods Use "Default" to use the node's DNS (useful for Tailscale/Netbird/VPN) Options: ClusterFirst (default), Default, ClusterFirstWithHostNet, None |
+| guacd.enabled | bool | `true` | Enable guacd deployment |
+| guacd.extraEnvFrom | list | `[]` | Additional environment variables from ConfigMap/Secret |
+| guacd.extraEnvVars | list | `[]` | Additional environment variables |
+| guacd.extraVolumeMounts | list | `[]` | Additional volume mounts |
+| guacd.extraVolumes | list | `[]` | Additional volumes |
+| guacd.image.pullPolicy | string | `"IfNotPresent"` | Image pull policy |
+| guacd.image.repository | string | `"guacamole/guacd"` | Guacd image repository |
+| guacd.image.tag | string | `""` | Guacd image tag (defaults to appVersion) |
+| guacd.imagePullSecrets | list | `[]` | Image pull secrets |
+| guacd.livenessProbe | object | `{"failureThreshold":3,"initialDelaySeconds":30,"periodSeconds":10,"tcpSocket":{"port":"guacd"},"timeoutSeconds":5}` | Liveness probe configuration |
+| guacd.logLevel | string | `"info"` | Log level (trace, debug, info, warning, error) |
+| guacd.nodeSelector | object | `{}` | Node selector |
+| guacd.pdb.enabled | bool | `false` | Enable PodDisruptionBudget |
+| guacd.pdb.minAvailable | int | `1` | Minimum available pods |
+| guacd.podAntiAffinityPreset | string | `"soft"` | Pod anti-affinity preset (soft/hard/none) |
+| guacd.podSecurityContext | object | `{"fsGroup":1000,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000}` | Pod security context |
+| guacd.readinessProbe | object | `{"failureThreshold":3,"initialDelaySeconds":10,"periodSeconds":5,"tcpSocket":{"port":"guacd"},"timeoutSeconds":3}` | Readiness probe configuration |
+| guacd.replicaCount | int | `1` | Number of replicas |
+| guacd.resources | object | `{"limits":{"cpu":"500m","memory":"512Mi"},"requests":{"cpu":"250m","memory":"256Mi"}}` | Resource requests and limits |
+| guacd.service.annotations | object | `{}` | Service annotations |
+| guacd.service.port | int | `4822` | Service port |
+| guacd.service.type | string | `"ClusterIP"` | Service type |
+| guacd.terminationGracePeriodSeconds | int | `30` | Termination grace period |
+| guacd.tolerations | list | `[]` | Tolerations |
+
+### Database Configuration
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| database.external | object | `{"database":"guacamole","enabled":false,"existingSecret":"","existingSecretPasswordKey":"password","hostname":"","password":"","port":"","username":"guacamole"}` | External database configuration Use this for databases not managed by this chart |
+| database.external.database | string | `"guacamole"` | External database name |
+| database.external.enabled | bool | `false` | Enable external database |
+| database.external.existingSecret | string | `""` | Existing secret with database credentials |
+| database.external.existingSecretPasswordKey | string | `"password"` | Key in existing secret for password |
+| database.external.hostname | string | `""` | External database hostname |
+| database.external.password | string | `""` | External database password (use existingSecret for production) |
+| database.external.port | string | `""` | External database port (auto-detected based on type if not set) |
+| database.external.username | string | `"guacamole"` | External database username |
+| database.type | string | `"postgresql"` | Database type (postgresql, mysql, mariadb, sqlserver) Note: sqlserver is only supported as external database |
+
+### PostgreSQL (CloudNative-PG)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| postgresql.affinity | object | `{}` |  |
+| postgresql.auth | object | `{"database":"guacamole","existingSecret":"","password":"","username":"guacamole"}` | Database authentication |
+| postgresql.auth.database | string | `"guacamole"` | Database name for Guacamole |
+| postgresql.auth.existingSecret | string | `""` | Use existing secret for credentials (keys: username, password) |
+| postgresql.auth.password | string | `""` | Database password (auto-generated if empty) |
+| postgresql.auth.username | string | `"guacamole"` | Database username |
+| postgresql.backup | object | `{"azure":{"destinationPath":"","secretName":""},"enabled":false,"gcs":{"destinationPath":"","secretName":""},"retentionPolicy":"30d","s3":{"destinationPath":"","endpointURL":"","secretName":""},"schedule":"0 0 * * *"}` | Backup configuration |
+| postgresql.backup.azure | object | `{"destinationPath":"","secretName":""}` | Azure Blob Storage configuration |
+| postgresql.backup.azure.destinationPath | string | `""` | Azure container destination path |
+| postgresql.backup.azure.secretName | string | `""` | Secret containing Azure credentials |
+| postgresql.backup.enabled | bool | `false` | Enable automated backups |
+| postgresql.backup.gcs | object | `{"destinationPath":"","secretName":""}` | Google Cloud Storage configuration |
+| postgresql.backup.gcs.destinationPath | string | `""` | GCS bucket destination path |
+| postgresql.backup.gcs.secretName | string | `""` | Secret containing GCS credentials |
+| postgresql.backup.retentionPolicy | string | `"30d"` | Backup retention policy |
+| postgresql.backup.s3 | object | `{"destinationPath":"","endpointURL":"","secretName":""}` | S3-compatible object storage configuration |
+| postgresql.backup.s3.destinationPath | string | `""` | S3 bucket destination path (e.g., s3://bucket/path) |
+| postgresql.backup.s3.endpointURL | string | `""` | S3 endpoint URL (for non-AWS S3) |
+| postgresql.backup.s3.secretName | string | `""` | Secret containing S3 credentials Must contain keys: ACCESS_KEY_ID, ACCESS_SECRET_KEY |
+| postgresql.backup.schedule | string | `"0 0 * * *"` | Backup schedule (cron format) |
+| postgresql.enabled | bool | `true` | Enable PostgreSQL via CloudNative-PG operator |
+| postgresql.ha | object | `{"enabled":false,"maxSyncReplicas":1,"minSyncReplicas":1}` | High Availability configuration |
+| postgresql.ha.enabled | bool | `false` | Enable synchronous replication (requires instances >= 2) |
+| postgresql.ha.maxSyncReplicas | int | `1` | Maximum number of synchronous replicas |
+| postgresql.ha.minSyncReplicas | int | `1` | Minimum number of synchronous replicas |
+| postgresql.image.repository | string | `"ghcr.io/cloudnative-pg/postgresql"` | PostgreSQL image (CNPG format) |
+| postgresql.image.tag | string | `"18"` | PostgreSQL version tag |
+| postgresql.instances | int | `1` | Number of instances (1 for standalone, 3+ for HA) |
+| postgresql.monitoring | object | `{"enabled":false,"podMonitor":false}` | Monitoring configuration |
+| postgresql.monitoring.enabled | bool | `false` | Enable Prometheus metrics |
+| postgresql.monitoring.podMonitor | bool | `false` | Enable default PodMonitor |
+| postgresql.nodeSelector | object | `{}` | Scheduling configuration |
+| postgresql.pooler | object | `{"defaultPoolSize":10,"enabled":false,"instances":1,"maxClientConnections":100,"poolMode":"session","resources":{}}` | Connection pooler (PgBouncer) configuration |
+| postgresql.pooler.defaultPoolSize | int | `10` | Default pool size |
+| postgresql.pooler.enabled | bool | `false` | Enable PgBouncer connection pooler |
+| postgresql.pooler.instances | int | `1` | Number of pooler instances |
+| postgresql.pooler.maxClientConnections | int | `100` | Maximum client connections |
+| postgresql.pooler.poolMode | string | `"session"` | Pooling mode (session, transaction, statement) |
+| postgresql.pooler.resources | object | `{}` | Resources for pooler pods |
+| postgresql.resources | object | `{}` | Resource requests/limits for PostgreSQL pods |
+| postgresql.storage | object | `{"size":"8Gi","storageClass":""}` | Storage configuration |
+| postgresql.storage.size | string | `"8Gi"` | Storage size |
+| postgresql.storage.storageClass | string | `""` | Storage class (empty for default) |
+| postgresql.tls | object | `{"enabled":false,"existingSecret":""}` | TLS configuration |
+| postgresql.tls.enabled | bool | `false` | Enable TLS for client connections |
+| postgresql.tls.existingSecret | string | `""` | Existing secret containing TLS certificates Must contain keys: tls.crt, tls.key, ca.crt |
+| postgresql.tolerations | list | `[]` |  |
+
+### MySQL (MySQL Operator)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| mysql.affinity | object | `{}` |  |
+| mysql.auth | object | `{"database":"guacamole","existingSecret":"","password":"","rootPassword":"","username":"guacamole"}` | Database authentication |
+| mysql.auth.database | string | `"guacamole"` | Database name for Guacamole |
+| mysql.auth.existingSecret | string | `""` | Use existing secret for root credentials Must contain keys: rootUser, rootHost, rootPassword |
+| mysql.auth.password | string | `""` | Database password (auto-generated if empty) |
+| mysql.auth.rootPassword | string | `""` | Root password (auto-generated if empty) |
+| mysql.auth.username | string | `"guacamole"` | Database username |
+| mysql.backup | object | `{"enabled":false,"schedule":"0 0 * * *","storage":{"s3":{"bucketName":"","endpoint":"","secretName":""}}}` | Backup configuration |
+| mysql.backup.enabled | bool | `false` | Enable automated backups |
+| mysql.backup.schedule | string | `"0 0 * * *"` | Backup schedule (cron format) |
+| mysql.backup.storage | object | `{"s3":{"bucketName":"","endpoint":"","secretName":""}}` | Backup storage configuration |
+| mysql.backup.storage.s3 | object | `{"bucketName":"","endpoint":"","secretName":""}` | S3-compatible storage |
+| mysql.backup.storage.s3.bucketName | string | `""` | S3 bucket name |
+| mysql.backup.storage.s3.endpoint | string | `""` | S3 endpoint URL |
+| mysql.backup.storage.s3.secretName | string | `""` | Secret containing S3 credentials |
+| mysql.enabled | bool | `false` | Enable MySQL via MySQL Operator |
+| mysql.instances | int | `1` | Number of MySQL server instances (1 for standalone, 3+ for InnoDB Cluster) |
+| mysql.nodeSelector | object | `{}` | Scheduling configuration |
+| mysql.resources | object | `{}` | Resource requests/limits for MySQL pods |
+| mysql.router | object | `{"instances":1,"resources":{}}` | MySQL Router configuration |
+| mysql.router.instances | int | `1` | Number of router instances |
+| mysql.router.resources | object | `{}` | Resources for router pods |
+| mysql.storage | object | `{"size":"8Gi","storageClass":""}` | Storage configuration |
+| mysql.storage.size | string | `"8Gi"` | Storage size |
+| mysql.storage.storageClass | string | `""` | Storage class (empty for default) |
+| mysql.tls | object | `{"existingSecret":"","useSelfSigned":true}` | TLS configuration |
+| mysql.tls.existingSecret | string | `""` | Use existing secret for TLS certificates Must contain keys: tls.crt, tls.key, ca.crt |
+| mysql.tls.useSelfSigned | bool | `true` | Use self-signed certificates |
+| mysql.tolerations | list | `[]` |  |
+| mysql.version | string | `"9.6.0"` | MySQL version |
+
+### MariaDB (MariaDB Operator)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| mariadb.affinity | object | `{}` |  |
+| mariadb.auth | object | `{"database":"guacamole","existingSecret":"","password":"","rootPassword":"","username":"guacamole"}` | Database authentication |
+| mariadb.auth.database | string | `"guacamole"` | Database name for Guacamole |
+| mariadb.auth.existingSecret | string | `""` | Use existing secret for credentials Must contain keys: root-password, password |
+| mariadb.auth.password | string | `""` | Database password (auto-generated if empty) |
+| mariadb.auth.rootPassword | string | `""` | Root password (auto-generated if empty) |
+| mariadb.auth.username | string | `"guacamole"` | Database username |
+| mariadb.backup | object | `{"enabled":false,"maxRetained":7,"s3":{"bucket":"","endpoint":"","secretName":""},"schedule":"0 0 * * *"}` | Backup configuration |
+| mariadb.backup.enabled | bool | `false` | Enable automated backups |
+| mariadb.backup.maxRetained | int | `7` | Maximum retained backups |
+| mariadb.backup.s3 | object | `{"bucket":"","endpoint":"","secretName":""}` | S3 storage configuration |
+| mariadb.backup.s3.bucket | string | `""` | S3 bucket name |
+| mariadb.backup.s3.endpoint | string | `""` | S3 endpoint URL |
+| mariadb.backup.s3.secretName | string | `""` | Secret containing S3 credentials Must contain keys: access-key-id, secret-access-key |
+| mariadb.backup.schedule | string | `"0 0 * * *"` | Backup schedule (cron format) |
+| mariadb.enabled | bool | `false` | Enable MariaDB via MariaDB Operator |
+| mariadb.galera | object | `{"agent":{"image":"ghcr.io/mariadb-operator/mariadb-operator:25.10.4"},"enabled":false,"recovery":{"clusterBootstrapTimeout":"10m","clusterHealthyTimeout":"3m","enabled":true,"podRecoveryTimeout":"5m","podSyncTimeout":"5m"}}` | High Availability with Galera |
+| mariadb.galera.agent | object | `{"image":"ghcr.io/mariadb-operator/mariadb-operator:25.10.4"}` | Galera agent image |
+| mariadb.galera.enabled | bool | `false` | Enable Galera cluster (requires replicas >= 3) |
+| mariadb.galera.recovery | object | `{"clusterBootstrapTimeout":"10m","clusterHealthyTimeout":"3m","enabled":true,"podRecoveryTimeout":"5m","podSyncTimeout":"5m"}` | Galera recovery configuration |
+| mariadb.image.repository | string | `"mariadb"` | MariaDB image repository |
+| mariadb.image.tag | string | `"12.1"` | MariaDB version tag |
+| mariadb.metrics | object | `{"enabled":false,"image":"prom/mysqld-exporter:v0.18.0","resources":{},"serviceMonitor":{"enabled":false}}` | Metrics / Monitoring |
+| mariadb.metrics.enabled | bool | `false` | Enable Prometheus metrics exporter |
+| mariadb.metrics.image | string | `"prom/mysqld-exporter:v0.18.0"` | Exporter image |
+| mariadb.metrics.resources | object | `{}` | Resources for exporter |
+| mariadb.metrics.serviceMonitor | object | `{"enabled":false}` | Create ServiceMonitor for Prometheus Operator |
+| mariadb.myCnf | string | `""` | Custom MariaDB configuration (my.cnf format) Will be appended to the default configuration |
+| mariadb.nodeSelector | object | `{}` | Scheduling configuration |
+| mariadb.replicas | int | `1` | Number of replicas (1 for standalone, 3+ for Galera) |
+| mariadb.replication | object | `{"enabled":false,"mode":"async"}` | Replication configuration (alternative to Galera) |
+| mariadb.replication.enabled | bool | `false` | Enable async replication |
+| mariadb.replication.mode | string | `"async"` | Replication mode (async, semi-sync) |
+| mariadb.resources | object | `{}` | Resource requests/limits for MariaDB pods |
+| mariadb.storage | object | `{"size":"8Gi","storageClass":""}` | Storage configuration |
+| mariadb.storage.size | string | `"8Gi"` | Storage size |
+| mariadb.storage.storageClass | string | `""` | Storage class (empty for default) |
+| mariadb.tls | object | `{"enabled":false,"existingSecret":""}` | TLS configuration |
+| mariadb.tls.enabled | bool | `false` | Enable TLS |
+| mariadb.tls.existingSecret | string | `""` | Use existing secret for TLS certificates |
+| mariadb.tolerations | list | `[]` |  |
+
+### Authentication
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| auth.cas | object | `{"authorizationEndpoint":"","clearpassKey":"","enabled":false,"groupAttribute":"","groupFormat":"plain","groupLdapAttribute":"","groupLdapBaseDn":"","redirectUri":""}` | CAS (Central Authentication Service) SSO |
+| auth.cas.authorizationEndpoint | string | `""` | CAS server authorization endpoint |
+| auth.cas.clearpassKey | string | `""` | Path to private key for ClearPass |
+| auth.cas.enabled | bool | `false` | Enable CAS authentication |
+| auth.cas.groupAttribute | string | `""` | CAS attribute for group membership |
+| auth.cas.groupFormat | string | `"plain"` | Group name format (plain or ldap) |
+| auth.cas.groupLdapAttribute | string | `""` | LDAP attribute for group filtering |
+| auth.cas.groupLdapBaseDn | string | `""` | LDAP base DN for group filtering |
+| auth.cas.redirectUri | string | `""` | Redirect URI for CAS callback |
+| auth.database | object | `{"enabled":true}` | Enable database authentication (always enabled when database configured) |
+| auth.duo | object | `{"apiHostname":"","authTimeout":5,"bypassHosts":"","clientId":"","clientSecret":"","enabled":false,"enforceHosts":"","existingSecret":"","redirectUri":""}` | Duo two-factor authentication |
+| auth.duo.apiHostname | string | `""` | Duo API hostname |
+| auth.duo.authTimeout | int | `5` | Authentication timeout in minutes |
+| auth.duo.bypassHosts | string | `""` | Comma-separated IPs/subnets to bypass Duo |
+| auth.duo.clientId | string | `""` | Duo client ID |
+| auth.duo.clientSecret | string | `""` | Duo client secret (use existingSecret for production) |
+| auth.duo.enabled | bool | `false` | Enable Duo 2FA |
+| auth.duo.enforceHosts | string | `""` | Comma-separated IPs/subnets that must use Duo |
+| auth.duo.existingSecret | string | `""` | Existing secret with Duo credentials |
+| auth.duo.redirectUri | string | `""` | Redirect URI for Duo callback |
+| auth.header | object | `{"enabled":false,"httpAuthHeader":"REMOTE_USER"}` | HTTP Header authentication |
+| auth.header.enabled | bool | `false` | Enable HTTP header authentication |
+| auth.header.httpAuthHeader | string | `"REMOTE_USER"` | HTTP header containing authenticated username |
+| auth.json | object | `{"enabled":false,"existingSecret":"","secretKey":""}` | JSON authentication |
+| auth.json.enabled | bool | `false` | Enable JSON authentication |
+| auth.json.existingSecret | string | `""` | Existing secret with JSON secret key |
+| auth.json.secretKey | string | `""` | 128-bit secret key as 32-character hex string |
+| auth.ldap | object | `{"enabled":false,"encryption":"none","existingSecret":"","extraConfig":{},"hostname":"","port":389,"searchBindDn":"","searchBindPassword":"","userBaseDn":"","usernameAttribute":"uid"}` | LDAP authentication |
+| auth.ldap.enabled | bool | `false` | Enable LDAP authentication |
+| auth.ldap.encryption | string | `"none"` | LDAP encryption (none, ssl, starttls) |
+| auth.ldap.existingSecret | string | `""` | Existing secret with LDAP bind password |
+| auth.ldap.extraConfig | object | `{}` | Additional LDAP configuration |
+| auth.ldap.hostname | string | `""` | LDAP server hostname |
+| auth.ldap.port | int | `389` | LDAP server port |
+| auth.ldap.searchBindDn | string | `""` | Search bind DN (optional) |
+| auth.ldap.searchBindPassword | string | `""` | Search bind password (use existingSecret for production) |
+| auth.ldap.userBaseDn | string | `""` | User base DN |
+| auth.ldap.usernameAttribute | string | `"uid"` | Username attribute |
+| auth.oidc | object | `{"authorizationEndpoint":"","clientId":"","clientSecret":"","enabled":false,"existingSecret":"","extraConfig":{},"issuer":"","jwksEndpoint":"","redirectUri":"","scope":"openid profile email","usernameClaim":"preferred_username"}` | OpenID Connect authentication |
+| auth.oidc.authorizationEndpoint | string | `""` | Authorization endpoint URL |
+| auth.oidc.clientId | string | `""` | Client ID |
+| auth.oidc.clientSecret | string | `""` | Client secret (use existingSecret for production) |
+| auth.oidc.enabled | bool | `false` | Enable OIDC authentication |
+| auth.oidc.existingSecret | string | `""` | Existing secret with OIDC client credentials |
+| auth.oidc.extraConfig | object | `{}` | Additional OIDC configuration |
+| auth.oidc.issuer | string | `""` | Issuer URL |
+| auth.oidc.jwksEndpoint | string | `""` | JWKS endpoint URL |
+| auth.oidc.redirectUri | string | `""` | Redirect URI |
+| auth.oidc.scope | string | `"openid profile email"` | Scopes |
+| auth.oidc.usernameClaim | string | `"preferred_username"` | Username claim |
+| auth.radius | object | `{"authPort":1812,"authProtocol":"pap","caFile":"","caPassword":"","caType":"","eapTtlsInnerProtocol":"","enabled":false,"existingSecret":"","hostname":"localhost","keyFile":"","keyPassword":"","keyType":"","nasIp":"","retries":5,"sharedSecret":"","timeout":60,"trustAll":false}` | RADIUS authentication |
+| auth.radius.authPort | int | `1812` | RADIUS authentication port |
+| auth.radius.authProtocol | string | `"pap"` | Authentication protocol |
+| auth.radius.caFile | string | `""` | Path to CA file |
+| auth.radius.caPassword | string | `""` | CA file password |
+| auth.radius.caType | string | `""` | CA file type |
+| auth.radius.eapTtlsInnerProtocol | string | `""` | EAP-TTLS inner protocol |
+| auth.radius.enabled | bool | `false` | Enable RADIUS authentication |
+| auth.radius.existingSecret | string | `""` | Existing secret with RADIUS shared secret |
+| auth.radius.hostname | string | `"localhost"` | RADIUS server hostname |
+| auth.radius.keyFile | string | `""` | Path to client key file |
+| auth.radius.keyPassword | string | `""` | Key file password |
+| auth.radius.keyType | string | `""` | Key file type |
+| auth.radius.nasIp | string | `""` | Network Access Server IP |
+| auth.radius.retries | int | `5` | Connection retries |
+| auth.radius.sharedSecret | string | `""` | RADIUS shared secret (use existingSecret for production) |
+| auth.radius.timeout | int | `60` | Connection timeout in seconds |
+| auth.radius.trustAll | bool | `false` | Trust all certificates |
+| auth.saml | object | `{"callbackUrl":"","enabled":false,"entityId":"","existingSecret":"","extraConfig":{},"idpMetadataUrl":""}` | SAML authentication |
+| auth.saml.callbackUrl | string | `""` | Callback URL |
+| auth.saml.enabled | bool | `false` | Enable SAML authentication |
+| auth.saml.entityId | string | `""` | Entity ID |
+| auth.saml.existingSecret | string | `""` | Existing secret with SAML credentials |
+| auth.saml.extraConfig | object | `{}` | Additional SAML configuration |
+| auth.saml.idpMetadataUrl | string | `""` | IdP metadata URL |
+| auth.ssl | object | `{"authUri":"","clientCertificateHeader":"X-Client-Certificate","clientVerifiedHeader":"X-Client-Verified","enabled":false,"maxDomainValidity":5,"maxTokenValidity":5,"primaryUri":"","subjectBaseDn":"","subjectUsernameAttribute":""}` | SSL/Certificate authentication |
+| auth.ssl.authUri | string | `""` | URI requiring client certificate |
+| auth.ssl.clientCertificateHeader | string | `"X-Client-Certificate"` | HTTP header containing URL-encoded client certificate |
+| auth.ssl.clientVerifiedHeader | string | `"X-Client-Verified"` | HTTP header indicating certificate verification status |
+| auth.ssl.enabled | bool | `false` | Enable SSL certificate authentication |
+| auth.ssl.maxDomainValidity | int | `5` | Temporary subdomain validity in minutes |
+| auth.ssl.maxTokenValidity | int | `5` | Token validity duration in minutes |
+| auth.ssl.primaryUri | string | `""` | URI without client certificate requirement |
+| auth.ssl.subjectBaseDn | string | `""` | Base DN to restrict valid certificate subject DNs |
+| auth.ssl.subjectUsernameAttribute | string | `""` | LDAP attribute from certificate DN to extract username |
+| auth.totp | object | `{"enabled":false,"issuer":"Apache Guacamole","keyLength":32,"mode":"optional"}` | TOTP (Two-Factor) authentication |
+| auth.totp.enabled | bool | `false` | Enable TOTP |
+| auth.totp.issuer | string | `"Apache Guacamole"` | Issuer name shown in authenticator apps |
+| auth.totp.keyLength | int | `32` | Key length (16, 24, or 32) |
+| auth.totp.mode | string | `"optional"` | TOTP mode (required or optional) |
+
+### Proxy
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| proxy.allowedIpsRegex | string | `"127\\.0\\.0\\.1|::1|10\\..*|172\\.(1[6-9]|2[0-9]|3[0-1])\\..*|192\\.168\\..*"` | Trusted proxy IP regex |
+| proxy.enabled | bool | `true` | Enable remote IP valve for reverse proxy |
+| proxy.ipHeader | string | `"X-Forwarded-For"` | IP header name |
+| proxy.protocolHeader | string | `"X-Forwarded-Proto"` | Protocol header name |
+
+### Vault / Secrets Management
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| vault.ksm | object | `{"allowUnverifiedCert":false,"allowUserConfig":false,"apiCallInterval":"","config":"","enabled":false,"existingSecret":"","stripWindowsDomains":false}` | Keeper Secrets Manager (KSM) integration |
+| vault.ksm.allowUnverifiedCert | bool | `false` | Accept unverified certificates |
+| vault.ksm.allowUserConfig | bool | `false` | Allow users to configure their own KSM vaults |
+| vault.ksm.apiCallInterval | string | `""` | Minimum milliseconds between API calls |
+| vault.ksm.config | string | `""` | Base64-encoded KSM configuration |
+| vault.ksm.enabled | bool | `false` | Enable KSM integration |
+| vault.ksm.existingSecret | string | `""` | Existing secret with KSM config |
+| vault.ksm.stripWindowsDomains | bool | `false` | Strip Windows domain prefixes from usernames |
+
+### QuickConnect
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| quickConnect.allowedParameters | string | `""` | Allowed parameters (comma-separated whitelist) |
+| quickConnect.deniedParameters | string | `""` | Denied parameters (comma-separated blacklist) |
+| quickConnect.enabled | bool | `false` | Enable QuickConnect for ad-hoc connections |
+
+### Recording
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| recording.createRecordingIndex | bool | `true` | Create search index |
+| recording.enabled | bool | `false` | Enable session recording |
+| recording.path | string | `"/recordings"` | Recording path inside guacd container |
+| recording.persistence.accessModes | list | `["ReadWriteOnce"]` | Access modes |
+| recording.persistence.enabled | bool | `false` | Enable persistence for recordings |
+| recording.persistence.existingClaim | string | `""` | Existing PVC name |
+| recording.persistence.size | string | `"10Gi"` | Storage size |
+| recording.persistence.storageClass | string | `""` | Storage class |
+| recording.playback | object | `{"enabled":false,"searchPath":"/recordings"}` | Enable recording playback in web UI |
+
+### API & Session
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| api.session.maxConnections | int | `0` | Maximum concurrent connections total (0 for unlimited) |
+| api.session.maxConnectionsPerUser | int | `0` | Maximum concurrent connections per user (0 for unlimited) |
+| api.session.timeout | int | `60` | Session timeout in minutes (0 for no timeout) |
+
+### Brute Force Protection
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| bruteForce.attemptWindow | int | `5` | Time window for counting failed attempts (minutes) |
+| bruteForce.enabled | bool | `true` | Enable brute force protection |
+| bruteForce.lockoutDuration | int | `15` | Lockout duration in minutes |
+| bruteForce.maxAttempts | int | `5` | Maximum failed login attempts before lockout |
+
+### Ingress
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| ingress.annotations | object | `{}` | Ingress annotations |
+| ingress.className | string | `""` | Ingress class name |
+| ingress.enabled | bool | `false` | Enable ingress |
+| ingress.hosts | list | `[{"host":"guacamole.local","paths":[{"path":"/","pathType":"Prefix"}]}]` | Ingress hosts |
+| ingress.tls | list | `[]` | Ingress TLS configuration |
+
+### Network Policy
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| networkPolicy.enabled | bool | `false` | Enable network policies |
+| networkPolicy.extraEgressRules | list | `[]` | Additional egress rules |
+| networkPolicy.extraIngressRules | list | `[]` | Additional ingress rules |
+| networkPolicy.ingressNamespaceSelector | object | `{}` | Allow ingress from specific namespaces |
+| networkPolicy.ingressPodSelector | object | `{}` | Allow ingress from specific pods |
+
+### Service Account & RBAC
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| rbac.create | bool | `true` | Create RBAC resources (Role and RoleBinding) |
+| serviceAccount.annotations | object | `{}` | Service account annotations |
+| serviceAccount.create | bool | `true` | Create service accounts |
+| serviceAccount.name | string | `""` | Service account name (auto-generated if not set) |
+
+### Extensions
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| extensions.enabled | bool | `false` | Enable custom extension loading |
+| extensions.extraVolumeMounts | list | `[]` | Extra volume mounts for custom extensions |
+| extensions.extraVolumes | list | `[]` | Extra volumes for custom extensions |
+| extensions.list | list | `[]` | List of extensions to download and install |
+
+### Logging
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| logging.guacamole.level | string | `"info"` |  |
+| logging.guacd.level | string | `"info"` |  |
+
+### Advanced
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| advanced.allowedFilePaths | string | `""` | Allowed file transfer paths (comma-separated) |
+| advanced.guacamoleHome | string | `"/etc/guacamole"` | GUACAMOLE_HOME directory |
+| advanced.tomcat | object | `{"connectionTimeout":20000,"maxThreads":200}` | Tomcat configuration |
+| advanced.websocket | object | `{"enabled":true}` | Enable WebSocket tunnel |
+
+## Examples
+
+### Production Setup with OIDC
+
+```yaml
+guacamole:
+  replicaCount: 3
+  pdb:
+    enabled: true
+    minAvailable: 2
+
+guacd:
+  replicaCount: 3
+  pdb:
+    enabled: true
+
+postgresql:
+  enabled: true
+  instances: 3
+  ha:
+    enabled: true
+  tls:
+    enabled: true
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"
+    s3:
+      destinationPath: s3://backups/guacamole
+      secretName: s3-creds
 
 auth:
   oidc:
@@ -658,30 +643,29 @@ auth:
     issuer: "https://idp.example.com"
     jwksEndpoint: "https://idp.example.com/certs"
     clientId: "guacamole"
-    existingSecret: "guacamole-oidc"
+    existingSecret: oidc-secret
+  totp:
+    enabled: true
+    mode: required
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  hosts:
+    - host: guacamole.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: guacamole-tls
+      hosts:
+        - guacamole.example.com
 ```
 
-### High Availability
-
-```yaml
-guacamole:
-  replicaCount: 3
-  pdb:
-    enabled: true
-    minAvailable: 2
-  hpa:
-    enabled: true
-    minReplicas: 2
-    maxReplicas: 10
-
-guacd:
-  replicaCount: 3
-  pdb:
-    enabled: true
-    minAvailable: 2
-```
-
-### With Recording
+### Session Recording
 
 ```yaml
 recording:
@@ -691,58 +675,51 @@ recording:
   persistence:
     enabled: true
     size: 100Gi
+    storageClass: fast-storage
 ```
 
-### PostgreSQL with Custom Configuration
+## Troubleshooting
+
+### Database Initialization
+
+Check the db-init job logs:
+
+```bash
+kubectl get jobs -n guacamole
+kubectl logs job/guacamole-db-init -n guacamole --all-containers
+```
+
+### Operator CRDs
+
+Verify operator status:
+
+```bash
+# CloudNative-PG
+kubectl get clusters.postgresql.cnpg.io -n guacamole
+
+# MariaDB
+kubectl get mariadbs.k8s.mariadb.com -n guacamole
+
+# MySQL
+kubectl get innodbclusters.mysql.oracle.com -n guacamole
+```
+
+### WebSocket Issues
+
+Ensure ingress has proper timeouts:
 
 ```yaml
-postgresql:
-  enabled: true
-  auth:
-    password: "secure-password"
-  configuration: |
-    max_connections = 200
-    shared_buffers = 256MB
-    work_mem = 8MB
-  resources:
-    requests:
-      memory: 512Mi
-      cpu: 250m
-    limits:
-      memory: 1Gi
-      cpu: 1000m
-  podAntiAffinityPreset: hard
+ingress:
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 ```
 
-### MySQL with Security Context
+## Links
 
-```yaml
-database:
-  type: mysql
-
-postgresql:
-  enabled: false
-
-mysql:
-  enabled: true
-  auth:
-    password: "mysql-password"
-    rootPassword: "root-password"
-  podSecurityContext:
-    fsGroup: 999
-  containerSecurityContext:
-    runAsUser: 999
-    runAsGroup: 999
-    runAsNonRoot: true
-    allowPrivilegeEscalation: false
-  startupProbe:
-    enabled: true
-    failureThreshold: 60
-  resources:
-    requests:
-      memory: 256Mi
-      cpu: 100m
-    limits:
-      memory: 1Gi
-      cpu: 500m
-```
+- [Apache Guacamole](https://guacamole.apache.org/)
+- [Guacamole Documentation](https://guacamole.apache.org/doc/gug/)
+- [CloudNative-PG](https://cloudnative-pg.io/)
+- [MariaDB Operator](https://github.com/mariadb-operator/mariadb-operator)
+- [MySQL Operator](https://dev.mysql.com/doc/mysql-operator/en/)

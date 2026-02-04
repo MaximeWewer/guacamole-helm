@@ -1,0 +1,67 @@
+{{- if and .Values.mysql.enabled (not .Values.database.external.enabled) }}
+apiVersion: mysql.oracle.com/v2
+kind: InnoDBCluster
+metadata:
+  name: {{ include "guacamole.fullname" . }}-mysql
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql
+spec:
+  instances: {{ .Values.mysql.instances | default 1 }}
+  version: {{ .Values.mysql.version | quote }}
+
+  router:
+    instances: {{ .Values.mysql.router.instances | default 1 }}
+    {{- with .Values.mysql.router.resources }}
+    resources:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+
+  secretName: {{ include "guacamole.fullname" . }}-mysql-credentials
+
+  {{- if .Values.mysql.tls.existingSecret }}
+  tlsCASecretName: {{ .Values.mysql.tls.existingSecret }}
+  tlsSecretName: {{ .Values.mysql.tls.existingSecret }}
+  {{- else }}
+  tlsUseSelfSigned: {{ .Values.mysql.tls.useSelfSigned | default true }}
+  {{- end }}
+
+  datadirVolumeClaimTemplate:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: {{ .Values.mysql.storage.size }}
+    {{- if .Values.mysql.storage.storageClass }}
+    storageClassName: {{ .Values.mysql.storage.storageClass }}
+    {{- end }}
+
+  {{- with .Values.mysql.resources }}
+  mycnf: |
+    [mysqld]
+    max_connections=200
+  podSpec:
+    containers:
+      - name: mysql
+        resources:
+          {{- toYaml . | nindent 10 }}
+  {{- end }}
+
+  {{- with .Values.mysql.nodeSelector }}
+  podSpec:
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+
+  {{- with .Values.mysql.tolerations }}
+  podSpec:
+    tolerations:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+
+  {{- with .Values.mysql.affinity }}
+  podSpec:
+    affinity:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+{{- end }}

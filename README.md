@@ -4,9 +4,12 @@ A production-ready Helm chart for deploying [Apache Guacamole](https://guacamole
 
 ## Features
 
-- **Multi-Database Support**: PostgreSQL 18+, MySQL 9+, MariaDB 12+, SQL Server 2025 (official Docker images)
-- **Automatic Schema Initialization**: Init containers handle database schema creation
-- **No External Dependencies**: All database templates are embedded (no Bitnami subcharts)
+- **Kubernetes Operator-Based Databases**: Leverages production-grade operators for database management
+  - [CloudNative-PG](https://cloudnative-pg.io/) for PostgreSQL (HA, backups, TLS)
+  - [MariaDB Operator](https://github.com/mariadb-operator/mariadb-operator) for MariaDB (Galera, replication, backups)
+  - [MySQL Operator](https://dev.mysql.com/doc/mysql-operator/en/) for MySQL InnoDB Cluster
+- **External Database Support**: SQL Server, managed databases (RDS, Cloud SQL, Azure Database)
+- **Automatic Schema Initialization**: Helm hooks handle Guacamole schema creation
 - **Comprehensive Authentication**:
   - OIDC (OpenID Connect)
   - SAML 2.0
@@ -31,12 +34,47 @@ A production-ready Helm chart for deploying [Apache Guacamole](https://guacamole
 - Helm 3.x
 - PV provisioner (for database and recordings persistence)
 
-## Installation
+### Database Operators (Required for internal databases)
 
-### Quick Start
+Before deploying this chart with an internal database, install the corresponding operator:
+
+#### CloudNative-PG (PostgreSQL) - Recommended
 
 ```bash
-helm install guacamole ./charts -n guacamole --create-namespace
+helm repo add cnpg https://cloudnative-pg.github.io/charts
+helm install cnpg cnpg/cloudnative-pg \
+  --namespace cnpg-system --create-namespace
+```
+
+#### MariaDB Operator
+
+```bash
+helm repo add mariadb-operator https://helm.mariadb.com/mariadb-operator
+helm install mariadb-operator-crds mariadb-operator/mariadb-operator-crds \
+  --namespace mariadb-operator --create-namespace
+helm install mariadb-operator mariadb-operator/mariadb-operator \
+  --namespace mariadb-operator
+```
+
+#### MySQL Operator
+
+```bash
+helm repo add mysql-operator https://mysql.github.io/mysql-operator/
+helm install mysql-operator mysql-operator/mysql-operator \
+  --namespace mysql-operator --create-namespace
+```
+
+## Installation
+
+### Quick Start (with PostgreSQL)
+
+```bash
+# Install CloudNative-PG operator first
+kubectl apply --server-side -f \
+  https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.28/releases/cnpg-1.28.0.yaml
+
+# Install Guacamole
+helm install guacamole ./chart -n guacamole --create-namespace
 ```
 
 ### From Repository
@@ -49,75 +87,150 @@ helm install guacamole guacamole/guacamole -n guacamole --create-namespace
 
 ## Database Configuration
 
-This chart provides **embedded database templates** using official Docker images - no external dependencies required. The default configuration is production-ready out of the box.
+### Operator-Managed Databases
 
-### Embedded Databases (Recommended for simplicity)
+This chart creates CRDs managed by Kubernetes operators. The operators handle:
 
-| Database   | Image      | Version | Default |
-| ---------- | ---------- | ------- | ------- |
-| PostgreSQL | `postgres` | 18      | Yes     |
-| MySQL      | `mysql`    | 9       | No      |
-| MariaDB    | `mariadb`  | 12      | No      |
-| SQL Server | `mssql`    | 2025    | No      |
+- Cluster provisioning and lifecycle
+- High availability and failover
+- Backups and point-in-time recovery
+- TLS certificate management
+- Monitoring and metrics
 
-**Basic usage** - works out of the box:
+The chart's `job-db-init` hook handles Guacamole schema initialization automatically.
 
-```yaml
-postgresql:
-  enabled: true
-  auth:
-    password: "your-secure-password"
-```
+| Database   | Operator        | CRD Created      | Default |
+|------------|-----------------|------------------|---------|
+| PostgreSQL | CloudNative-PG  | `Cluster`        | Yes     |
+| MySQL      | MySQL Operator  | `InnoDBCluster`  | No      |
+| MariaDB    | MariaDB Operator| `MariaDB`        | No      |
 
-**Advanced configuration** - for production tuning:
+#### PostgreSQL (CloudNative-PG)
 
 ```yaml
 postgresql:
   enabled: true
+  instances: 3  # HA cluster
+  image:
+    repository: ghcr.io/cloudnative-pg/postgresql
+    tag: "18"
   auth:
-    password: "your-secure-password"
-  # Custom PostgreSQL configuration
-  configuration: |
-    max_connections = 200
-    shared_buffers = 256MB
-  # Security contexts
-  podSecurityContext:
-    fsGroup: 999
-  containerSecurityContext:
-    runAsNonRoot: true
-    allowPrivilegeEscalation: false
-  # Probes tuning
-  startupProbe:
+    database: guacamole
+    username: guacamole
+    password: "secure-password"  # Or use existingSecret
+  storage:
+    size: 10Gi
+    storageClass: "fast-ssd"
+  # High Availability
+  ha:
     enabled: true
-    failureThreshold: 60
-  # Resources
-  resources:
-    requests:
-      memory: 512Mi
-      cpu: 250m
-    limits:
-      memory: 1Gi
-  # Anti-affinity for HA
-  podAntiAffinityPreset: hard
+    minSyncReplicas: 1
+    maxSyncReplicas: 2
+  # TLS encryption
+  tls:
+    enabled: true
+  # Connection pooling (PgBouncer)
+  pooler:
+    enabled: true
+    instances: 2
+    poolMode: transaction
+  # Automated backups to S3
+  backup:
+    enabled: true
+    schedule: "0 0 * * *"
+    retentionPolicy: "30d"
+    s3:
+      bucket: my-backup-bucket
+      secretName: s3-credentials
+  # Prometheus monitoring
+  monitoring:
+    enabled: true
+    podMonitor: true
 ```
 
-Available advanced options for all databases:
+#### MySQL (InnoDB Cluster)
 
-- `configuration` / `customConfigMap` - Custom database configuration
-- `podSecurityContext` / `containerSecurityContext` - Security settings
-- `startupProbe` / `livenessProbe` / `readinessProbe` - Health checks
-- `resources` - CPU/Memory limits
-- `affinity` / `podAntiAffinityPreset` - Scheduling constraints
-- `extraEnvVars` / `extraVolumes` / `initContainers` - Extensibility
+```yaml
+postgresql:
+  enabled: false
 
-See [charts/README.md](charts/README.md) for the complete parameter reference.
+mysql:
+  enabled: true
+  instances: 3
+  version: "9.6.0"
+  router:
+    instances: 2
+  auth:
+    database: guacamole
+    username: guacamole
+    password: "secure-password"
+    rootPassword: "root-secure-password"
+  storage:
+    size: 10Gi
+  tls:
+    useSelfSigned: true  # Or provide existingSecret
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"
+    s3:
+      bucket: my-backup-bucket
+      secretName: s3-credentials
+```
+
+#### MariaDB (with Galera)
+
+```yaml
+postgresql:
+  enabled: false
+
+mariadb:
+  enabled: true
+  replicas: 3
+  image:
+    repository: mariadb
+    tag: "12.1"
+  auth:
+    database: guacamole
+    username: guacamole
+    password: "secure-password"
+    rootPassword: "root-secure-password"
+  storage:
+    size: 10Gi
+  # Galera multi-master clustering
+  galera:
+    enabled: true
+    recovery:
+      enabled: true
+      clusterHealthyTimeout: "3m"
+  # Or async replication instead
+  # replication:
+  #   enabled: true
+  #   mode: semi-sync
+  # TLS encryption
+  tls:
+    enabled: true
+    existingSecret: mariadb-tls-certs
+  # S3 backups
+  backup:
+    enabled: true
+    schedule: "0 3 * * *"
+    maxRetained: 7
+    s3:
+      bucket: my-backup-bucket
+      secretName: s3-credentials
+  # Prometheus metrics
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+```
 
 ### External Database (BYO Database)
 
 For managed databases (RDS, Cloud SQL, Azure Database) or existing infrastructure:
 
 ```yaml
-# Disable embedded database
+# Disable internal databases
 postgresql:
   enabled: false
 
@@ -133,13 +246,7 @@ database:
     existingSecret: guacamole-db-credentials  # Must contain key: password
 ```
 
-This approach is recommended when you need:
-
-- Managed database services with automated backups
-- High availability / Multi-AZ deployments
-- Advanced features (read replicas, auto-scaling)
-- Compliance with organizational database policies
-- TLS/SSL encrypted connections
+> **Note**: SQL Server is only supported as an external database.
 
 ## Complete Production Example
 
@@ -165,25 +272,41 @@ guacd:
     enabled: true
     minAvailable: 2
 
-database:
-  type: postgresql
-  init:
-    enabled: true
-
+# PostgreSQL with CloudNative-PG
 postgresql:
   enabled: true
+  instances: 3
   auth:
     existingSecret: guacamole-postgresql-secret
-  persistence:
-    enabled: true
+  storage:
     size: 20Gi
+    storageClass: fast-ssd
+  ha:
+    enabled: true
+    minSyncReplicas: 1
+    maxSyncReplicas: 2
+  tls:
+    enabled: true
+  pooler:
+    enabled: true
+    instances: 2
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"
+    retentionPolicy: "30d"
+    s3:
+      bucket: guacamole-backups
+      secretName: backup-s3-credentials
+  monitoring:
+    enabled: true
+    podMonitor: true
   resources:
     requests:
-      memory: 256Mi
-      cpu: 100m
+      memory: 512Mi
+      cpu: 250m
     limits:
-      memory: 1Gi
-      cpu: 500m
+      memory: 2Gi
+      cpu: 1000m
 
 auth:
   oidc:
@@ -255,7 +378,7 @@ Then open <http://localhost:8080> in your browser.
 ## Upgrading
 
 ```bash
-helm upgrade guacamole ./charts -n guacamole -f your-values.yaml
+helm upgrade guacamole ./chart -n guacamole -f your-values.yaml
 ```
 
 ## Uninstalling
@@ -269,46 +392,68 @@ kubectl delete pvc -l app.kubernetes.io/instance=guacamole -n guacamole
 
 ## Parameters Reference
 
-See [charts/README.md](charts/README.md) for the complete list of configurable parameters, or [charts/values.yaml](charts/values.yaml) for defaults.
+See [chart/values.yaml](chart/values.yaml) for the complete list of configurable parameters.
 
 ### Key Parameters
 
-| Parameter                | Description                   | Default      |
-| ------------------------ | ----------------------------- | ------------ |
-| `guacamole.enabled`      | Enable Guacamole deployment   | `true`       |
-| `guacamole.replicaCount` | Number of replicas            | `1`          |
-| `guacd.enabled`          | Enable guacd deployment       | `true`       |
-| `guacd.replicaCount`     | Number of replicas            | `1`          |
-| `database.type`          | Database type                 | `postgresql` |
-| `database.init.enabled`  | Enable schema initialization  | `true`       |
-| `postgresql.enabled`     | Deploy PostgreSQL             | `true`       |
-| `mysql.enabled`          | Deploy MySQL                  | `false`      |
-| `mariadb.enabled`        | Deploy MariaDB                | `false`      |
-| `sqlserver.enabled`      | Deploy SQL Server             | `false`      |
-| `auth.oidc.enabled`      | Enable OIDC auth              | `false`      |
-| `auth.ldap.enabled`      | Enable LDAP auth              | `false`      |
-| `auth.saml.enabled`      | Enable SAML auth              | `false`      |
-| `auth.totp.enabled`      | Enable TOTP 2FA               | `false`      |
-| `auth.duo.enabled`       | Enable Duo 2FA                | `false`      |
-| `auth.radius.enabled`    | Enable RADIUS auth            | `false`      |
-| `auth.cas.enabled`       | Enable CAS auth               | `false`      |
-| `auth.header.enabled`    | Enable HTTP header auth       | `false`      |
-| `auth.ssl.enabled`       | Enable SSL cert auth          | `false`      |
-| `vault.ksm.enabled`      | Enable Keeper Secrets Manager | `false`      |
-| `quickConnect.enabled`   | Enable QuickConnect           | `false`      |
-| `recording.enabled`      | Enable session recording      | `false`      |
-| `ingress.enabled`        | Enable Ingress                | `false`      |
-| `networkPolicy.enabled`  | Enable network policies       | `false`      |
+| Parameter                | Description                        | Default      |
+|--------------------------|------------------------------------|--------------|
+| `guacamole.enabled`      | Enable Guacamole deployment        | `true`       |
+| `guacamole.replicaCount` | Number of replicas                 | `1`          |
+| `guacd.enabled`          | Enable guacd deployment            | `true`       |
+| `guacd.replicaCount`     | Number of replicas                 | `1`          |
+| `database.type`          | Database type (for external)       | `postgresql` |
+| `postgresql.enabled`     | Deploy PostgreSQL (CNPG)           | `true`       |
+| `postgresql.instances`   | Number of PostgreSQL instances     | `1`          |
+| `postgresql.ha.enabled`  | Enable synchronous replication     | `false`      |
+| `mysql.enabled`          | Deploy MySQL (InnoDB Cluster)      | `false`      |
+| `mysql.instances`        | Number of MySQL instances          | `1`          |
+| `mariadb.enabled`        | Deploy MariaDB                     | `false`      |
+| `mariadb.replicas`       | Number of MariaDB replicas         | `1`          |
+| `mariadb.galera.enabled` | Enable Galera clustering           | `false`      |
+| `auth.oidc.enabled`      | Enable OIDC auth                   | `false`      |
+| `auth.ldap.enabled`      | Enable LDAP auth                   | `false`      |
+| `auth.saml.enabled`      | Enable SAML auth                   | `false`      |
+| `auth.totp.enabled`      | Enable TOTP 2FA                    | `false`      |
+| `auth.duo.enabled`       | Enable Duo 2FA                     | `false`      |
+| `auth.radius.enabled`    | Enable RADIUS auth                 | `false`      |
+| `auth.cas.enabled`       | Enable CAS auth                    | `false`      |
+| `auth.header.enabled`    | Enable HTTP header auth            | `false`      |
+| `auth.ssl.enabled`       | Enable SSL cert auth               | `false`      |
+| `vault.ksm.enabled`      | Enable Keeper Secrets Manager      | `false`      |
+| `quickConnect.enabled`   | Enable QuickConnect                | `false`      |
+| `recording.enabled`      | Enable session recording           | `false`      |
+| `ingress.enabled`        | Enable Ingress                     | `false`      |
+| `networkPolicy.enabled`  | Enable network policies            | `false`      |
 
 ## Troubleshooting
 
 ### Database Connection Issues
 
-Check the init container logs:
+Check the db-init job logs:
 
 ```bash
-kubectl logs <guacamole-pod> -c db-init
-kubectl logs <guacamole-pod> -c db-apply
+# List jobs
+kubectl get jobs -n guacamole
+
+# Check job logs
+kubectl logs job/guacamole-db-init -n guacamole --all-containers
+```
+
+### Operator CRD Issues
+
+Verify the operator is running and the CRD is created:
+
+```bash
+# CloudNative-PG
+kubectl get clusters.postgresql.cnpg.io -n guacamole
+kubectl describe cluster guacamole-postgresql -n guacamole
+
+# MariaDB
+kubectl get mariadbs.k8s.mariadb.com -n guacamole
+
+# MySQL
+kubectl get innodbclusters.mysql.oracle.com -n guacamole
 ```
 
 ### WebSocket Connection Failures
@@ -331,4 +476,6 @@ Apache License 2.0
 
 - [Apache Guacamole](https://guacamole.apache.org/)
 - [Guacamole Documentation](https://guacamole.apache.org/doc/gug/)
-- [Guacamole Docker](https://guacamole.apache.org/doc/gug/guacamole-docker.html)
+- [CloudNative-PG](https://cloudnative-pg.io/)
+- [MariaDB Operator](https://github.com/mariadb-operator/mariadb-operator)
+- [MySQL Operator](https://dev.mysql.com/doc/mysql-operator/en/)

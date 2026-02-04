@@ -178,15 +178,6 @@ guacd:
   # Options: ClusterFirst (default), Default, ClusterFirstWithHostNet, None
   dnsPolicy: ""
   # -- Custom DNS configuration
-  # Example for using node DNS with Tailscale/Netbird:
-  #   dnsPolicy: "Default"
-  # Example for custom DNS servers:
-  #   dnsPolicy: "None"
-  #   dnsConfig:
-  #     nameservers:
-  #       - 100.100.100.100  # Tailscale DNS
-  #     searches:
-  #       - tailnet-name.ts.net
   dnsConfig: {}
 
   # -- Container security context
@@ -262,8 +253,6 @@ serviceAccount:
 # =============================================================================
 rbac:
   # -- Create RBAC resources (Role and RoleBinding)
-  # The Role is intentionally empty (no permissions) as Guacamole pods
-  # do not need any Kubernetes API access
   create: true
 
 # =============================================================================
@@ -283,17 +272,19 @@ proxy:
 # Database Configuration
 # =============================================================================
 database:
-  # -- Database type
+  # -- Database type (postgresql, mysql, mariadb, sqlserver)
+  # Note: sqlserver is only supported as external database
   type: postgresql
 
-  # -- Use external database (if false, uses subchart)
+  # -- External database configuration
+  # Use this for databases not managed by this chart
   external:
     # -- Enable external database
     enabled: false
     # -- External database hostname
     hostname: ""
-    # -- External database port
-    port: 5432
+    # -- External database port (auto-detected based on type if not set)
+    port: ""
     # -- External database name
     database: guacamole
     # -- External database username
@@ -301,444 +292,341 @@ database:
     # -- External database password (use existingSecret for production)
     password: ""
     # -- Existing secret with database credentials
-    # Must contain keys: password (and optionally: username)
     existingSecret: ""
     # -- Key in existing secret for password
     existingSecretPasswordKey: password
 
-  # -- Database initialization
-  init:
-    # -- Enable schema initialization (creates Job)
-    enabled: true
-    # -- Recreate schema on upgrade (DANGER: drops existing data)
-    recreate: false
-    # -- Image for schema generation (uses guacamole image)
-    image:
-      # -- Init job image repository
-      repository: guacamole/guacamole
-      # -- Init job image tag (defaults to appVersion)
-      tag: ""
-      # -- Image pull policy
-      pullPolicy: IfNotPresent
-    # -- Database client images for schema application
-    # These images contain the CLI tools (psql, mysql, mariadb-client, sqlcmd)
-    # Uses official Docker images
-    clientImages:
-      postgresql:
-        repository: postgres
-        tag: "18"
-      mysql:
-        repository: mysql
-        tag: "9"
-      mariadb:
-        repository: mariadb
-        tag: "12"
-      sqlserver:
-        repository: mcr.microsoft.com/mssql/server
-        tag: "2025-latest"
-    # -- Resources for init job
-    resources:
-      requests:
-        memory: 128Mi
-        cpu: 100m
-      limits:
-        memory: 256Mi
-        cpu: 200m
-    # -- Init job backoff limit
-    backoffLimit: 3
-    # -- Time to live after completion (seconds)
-    ttlSecondsAfterFinished: 300
-    # -- Use Helm hooks (pre-install, pre-upgrade) instead of init containers
-    # Note: Hooks run BEFORE database is deployed, so this only works with external databases
-    # For subchart databases (postgresql.enabled=true), use init containers (useHooks=false)
-    useHooks: false
-    # -- Hook weight (lower runs first)
-    hookWeight: "-5"
-    # -- Hook delete policy
-    hookDeletePolicy: before-hook-creation,hook-succeeded
-
-# PostgreSQL configuration (official Docker image)
+# =============================================================================
+# PostgreSQL Configuration (CloudNative-PG Operator)
+# =============================================================================
+# PREREQUISITE: CloudNative-PG operator must be installed
+# Install: helm repo add cnpg https://cloudnative-pg.github.io/charts
+#          helm install cnpg cnpg/cloudnative-pg \
+#            --namespace cnpg-system --create-namespace
+#
+# Documentation: https://cloudnative-pg.io/documentation/
 postgresql:
-  # -- Enable PostgreSQL deployment
+  # -- Enable PostgreSQL via CloudNative-PG operator
   enabled: true
+
+  # -- Number of instances (1 for standalone, 3+ for HA)
+  instances: 1
+
   image:
-    # -- PostgreSQL image repository (official Docker image)
-    repository: postgres
-    # -- PostgreSQL image tag
+    # -- PostgreSQL image (CNPG format)
+    repository: ghcr.io/cloudnative-pg/postgresql
+    # -- PostgreSQL version tag
     tag: "18"
-    # -- Image pull policy
-    pullPolicy: IfNotPresent
-  # -- Image pull secrets
-  imagePullSecrets: []
-  auth:
-    # -- PostgreSQL database name
-    database: guacamole
-    # -- PostgreSQL username
-    username: guacamole
-    # -- PostgreSQL password (auto-generated if not set)
-    password: ""
-    # -- Existing secret with PostgreSQL password (key: password)
-    existingSecret: ""
-  service:
-    # -- Service type
-    type: ClusterIP
-    # -- Service port
-    port: 5432
-  persistence:
-    # -- Enable persistence
-    enabled: true
-    # -- Persistence size
-    size: 8Gi
-    # -- Storage class (empty for default)
-    storageClass: ""
-    # -- Access modes
-    accessModes:
-      - ReadWriteOnce
-    # -- Annotations for PVC
-    annotations: {}
-  # -- Custom postgresql.conf configuration
-  configuration: ""
-  # -- Existing ConfigMap with custom configuration
-  customConfigMap: ""
-  # -- Resources for PostgreSQL
-  resources: {}
-  # -- Pod security context
-  podSecurityContext:
-    fsGroup: 999
-  # -- Container security context
-  containerSecurityContext:
-    runAsUser: 999
-    runAsGroup: 999
-    runAsNonRoot: true
-    allowPrivilegeEscalation: false
-  # -- Startup probe configuration
-  startupProbe:
-    enabled: true
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 30
-    successThreshold: 1
-  # -- Liveness probe configuration
-  livenessProbe:
-    enabled: true
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 6
-    successThreshold: 1
-  # -- Readiness probe configuration
-  readinessProbe:
-    enabled: true
-    initialDelaySeconds: 5
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 6
-    successThreshold: 1
-  # -- Termination grace period in seconds
-  terminationGracePeriodSeconds: 120
-  # -- Update strategy for StatefulSet
-  updateStrategy:
-    type: RollingUpdate
-  # -- Priority class name
-  priorityClassName: ""
-  # -- Node selector
-  nodeSelector: {}
-  # -- Tolerations
-  tolerations: []
-  # -- Affinity rules
-  affinity: {}
-  # -- Pod anti-affinity preset (soft/hard/empty)
-  podAntiAffinityPreset: ""
-  # -- Pod annotations
-  podAnnotations: {}
-  # -- Pod labels
-  podLabels: {}
-  # -- StatefulSet annotations
-  annotations: {}
-  # -- Additional environment variables
-  extraEnvVars: []
-  # -- Additional environment variables from ConfigMap/Secret
-  extraEnvFrom: []
-  # -- Additional volume mounts
-  extraVolumeMounts: []
-  # -- Additional volumes
-  extraVolumes: []
-  # -- Init containers
-  initContainers: []
 
-# MySQL configuration (official Docker image)
-mysql:
-  # -- Enable MySQL deployment
-  enabled: false
-  image:
-    # -- MySQL image repository (official Docker image)
-    repository: mysql
-    # -- MySQL image tag
-    tag: "9"
-    # -- Image pull policy
-    pullPolicy: IfNotPresent
-  # -- Image pull secrets
-  imagePullSecrets: []
+  # -- Database authentication
   auth:
-    # -- MySQL database name
-    database: guacamole
-    # -- MySQL username
-    username: guacamole
-    # -- MySQL password (auto-generated if not set)
-    password: ""
-    # -- MySQL root password (auto-generated if not set)
-    rootPassword: ""
-    # -- Existing secret with MySQL passwords (keys: password, root-password)
-    existingSecret: ""
-  service:
-    # -- Service type
-    type: ClusterIP
-    # -- Service port
-    port: 3306
-  persistence:
-    # -- Enable persistence
-    enabled: true
-    # -- Persistence size
-    size: 8Gi
-    # -- Storage class (empty for default)
-    storageClass: ""
-    # -- Access modes
-    accessModes:
-      - ReadWriteOnce
-    # -- Annotations for PVC
-    annotations: {}
-  # -- Custom my.cnf configuration
-  configuration: ""
-  # -- Existing ConfigMap with custom configuration
-  customConfigMap: ""
-  # -- Resources for MySQL
-  resources: {}
-  # -- Pod security context
-  podSecurityContext:
-    fsGroup: 999
-  # -- Container security context
-  containerSecurityContext:
-    runAsUser: 999
-    runAsGroup: 999
-    runAsNonRoot: true
-    allowPrivilegeEscalation: false
-  # -- Startup probe configuration
-  startupProbe:
-    enabled: true
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 30
-    successThreshold: 1
-  # -- Liveness probe configuration
-  livenessProbe:
-    enabled: true
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 6
-    successThreshold: 1
-  # -- Readiness probe configuration
-  readinessProbe:
-    enabled: true
-    initialDelaySeconds: 5
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 6
-    successThreshold: 1
-  # -- Termination grace period in seconds
-  terminationGracePeriodSeconds: 120
-  # -- Update strategy for StatefulSet
-  updateStrategy:
-    type: RollingUpdate
-  # -- Priority class name
-  priorityClassName: ""
-  # -- Node selector
-  nodeSelector: {}
-  # -- Tolerations
-  tolerations: []
-  # -- Affinity rules
-  affinity: {}
-  # -- Pod anti-affinity preset (soft/hard/empty)
-  podAntiAffinityPreset: ""
-  # -- Pod annotations
-  podAnnotations: {}
-  # -- Pod labels
-  podLabels: {}
-  # -- StatefulSet annotations
-  annotations: {}
-  # -- Additional environment variables
-  extraEnvVars: []
-  # -- Additional environment variables from ConfigMap/Secret
-  extraEnvFrom: []
-  # -- Additional volume mounts
-  extraVolumeMounts: []
-  # -- Additional volumes
-  extraVolumes: []
-  # -- Init containers
-  initContainers: []
-
-# MariaDB configuration (official Docker image)
-mariadb:
-  # -- Enable MariaDB deployment
-  enabled: false
-  image:
-    # -- MariaDB image repository (official Docker image)
-    repository: mariadb
-    # -- MariaDB image tag
-    tag: "12"
-    # -- Image pull policy
-    pullPolicy: IfNotPresent
-  # -- Image pull secrets
-  imagePullSecrets: []
-  auth:
-    # -- MariaDB database name
-    database: guacamole
-    # -- MariaDB username
-    username: guacamole
-    # -- MariaDB password (auto-generated if not set)
-    password: ""
-    # -- MariaDB root password (auto-generated if not set)
-    rootPassword: ""
-    # -- Existing secret with MariaDB passwords (keys: password, root-password)
-    existingSecret: ""
-  service:
-    # -- Service type
-    type: ClusterIP
-    # -- Service port
-    port: 3306
-  persistence:
-    # -- Enable persistence
-    enabled: true
-    # -- Persistence size
-    size: 8Gi
-    # -- Storage class (empty for default)
-    storageClass: ""
-    # -- Access modes
-    accessModes:
-      - ReadWriteOnce
-    # -- Annotations for PVC
-    annotations: {}
-  # -- Custom my.cnf configuration
-  configuration: ""
-  # -- Existing ConfigMap with custom configuration
-  customConfigMap: ""
-  # -- Resources for MariaDB
-  resources: {}
-  # -- Pod security context
-  podSecurityContext:
-    fsGroup: 999
-  # -- Container security context
-  containerSecurityContext:
-    runAsUser: 999
-    runAsGroup: 999
-    runAsNonRoot: true
-    allowPrivilegeEscalation: false
-  # -- Startup probe configuration
-  startupProbe:
-    enabled: true
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 30
-    successThreshold: 1
-  # -- Liveness probe configuration
-  livenessProbe:
-    enabled: true
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 6
-    successThreshold: 1
-  # -- Readiness probe configuration
-  readinessProbe:
-    enabled: true
-    initialDelaySeconds: 5
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 6
-    successThreshold: 1
-  # -- Termination grace period in seconds
-  terminationGracePeriodSeconds: 120
-  # -- Update strategy for StatefulSet
-  updateStrategy:
-    type: RollingUpdate
-  # -- Priority class name
-  priorityClassName: ""
-  # -- Node selector
-  nodeSelector: {}
-  # -- Tolerations
-  tolerations: []
-  # -- Affinity rules
-  affinity: {}
-  # -- Pod anti-affinity preset (soft/hard/empty)
-  podAntiAffinityPreset: ""
-  # -- Pod annotations
-  podAnnotations: {}
-  # -- Pod labels
-  podLabels: {}
-  # -- StatefulSet annotations
-  annotations: {}
-  # -- Additional environment variables
-  extraEnvVars: []
-  # -- Additional environment variables from ConfigMap/Secret
-  extraEnvFrom: []
-  # -- Additional volume mounts
-  extraVolumeMounts: []
-  # -- Additional volumes
-  extraVolumes: []
-  # -- Init containers
-  initContainers: []
-
-# SQL Server configuration (embedded templates)
-sqlserver:
-  # -- Enable SQL Server deployment
-  enabled: false
-  image:
-    # -- SQL Server image repository
-    repository: mcr.microsoft.com/mssql/server
-    # -- SQL Server image tag
-    tag: "2025-latest"
-    # -- Image pull policy
-    pullPolicy: IfNotPresent
-  # -- SQL Server edition (Developer, Express, Standard, Enterprise)
-  edition: Developer
-  # -- Accept EULA (required)
-  acceptEula: "Y"
-  # -- Enable SQL Agent
-  agentEnabled: true
-  auth:
-    # -- SA password (use existingSecret for production)
-    saPassword: ""
     # -- Database name for Guacamole
     database: guacamole
-    # -- Username for Guacamole
+    # -- Database username
     username: guacamole
-    # -- Password for Guacamole user
+    # -- Database password (auto-generated if empty)
     password: ""
-    # -- Existing secret with SQL Server credentials
-    # Must contain keys: sa-password, password
+    # -- Use existing secret for credentials (keys: username, password)
     existingSecret: ""
-  service:
-    # -- Service type
-    type: ClusterIP
-    # -- Service port
-    port: 1433
-  persistence:
-    # -- Enable persistence
-    enabled: true
+
+  # -- Storage configuration
+  storage:
     # -- Storage size
     size: 8Gi
     # -- Storage class (empty for default)
     storageClass: ""
-  resources:
-    requests:
-      memory: 2Gi
-      cpu: 500m
-    limits:
-      memory: 4Gi
-      cpu: 2000m
+
+  # -- Resource requests/limits for PostgreSQL pods
+  resources: {}
+  #  requests:
+  #    memory: 256Mi
+  #    cpu: 100m
+  #  limits:
+  #    memory: 1Gi
+  #    cpu: 1000m
+
+  # -- High Availability configuration
+  ha:
+    # -- Enable synchronous replication (requires instances >= 2)
+    enabled: false
+    # -- Minimum number of synchronous replicas
+    minSyncReplicas: 1
+    # -- Maximum number of synchronous replicas
+    maxSyncReplicas: 1
+
+  # -- TLS configuration
+  tls:
+    # -- Enable TLS for client connections
+    enabled: false
+    # -- Existing secret containing TLS certificates
+    # Must contain keys: tls.crt, tls.key, ca.crt
+    existingSecret: ""
+
+  # -- Connection pooler (PgBouncer) configuration
+  pooler:
+    # -- Enable PgBouncer connection pooler
+    enabled: false
+    # -- Number of pooler instances
+    instances: 1
+    # -- Pooling mode (session, transaction, statement)
+    poolMode: session
+    # -- Default pool size
+    defaultPoolSize: 10
+    # -- Maximum client connections
+    maxClientConnections: 100
+    # -- Resources for pooler pods
+    resources: {}
+
+  # -- Backup configuration
+  backup:
+    # -- Enable automated backups
+    enabled: false
+    # -- Backup schedule (cron format)
+    schedule: "0 0 * * *"
+    # -- Backup retention policy
+    retentionPolicy: "30d"
+    # -- S3-compatible object storage configuration
+    s3:
+      # -- S3 bucket destination path (e.g., s3://bucket/path)
+      destinationPath: ""
+      # -- S3 endpoint URL (for non-AWS S3)
+      endpointURL: ""
+      # -- Secret containing S3 credentials
+      # Must contain keys: ACCESS_KEY_ID, ACCESS_SECRET_KEY
+      secretName: ""
+    # -- Azure Blob Storage configuration
+    azure:
+      # -- Azure container destination path
+      destinationPath: ""
+      # -- Secret containing Azure credentials
+      secretName: ""
+    # -- Google Cloud Storage configuration
+    gcs:
+      # -- GCS bucket destination path
+      destinationPath: ""
+      # -- Secret containing GCS credentials
+      secretName: ""
+
+  # -- Monitoring configuration
+  monitoring:
+    # -- Enable Prometheus metrics
+    enabled: false
+    # -- Enable default PodMonitor
+    podMonitor: false
+
+  # -- Scheduling configuration
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# =============================================================================
+# MySQL Configuration (MySQL Operator for Kubernetes)
+# =============================================================================
+# PREREQUISITE: MySQL Operator must be installed
+# Install: helm repo add mysql-operator https://mysql.github.io/mysql-operator/
+#          helm install mysql-operator mysql-operator/mysql-operator \
+#            --namespace mysql-operator --create-namespace
+#
+# Documentation: https://dev.mysql.com/doc/mysql-operator/en/
+mysql:
+  # -- Enable MySQL via MySQL Operator
+  enabled: false
+
+  # -- Number of MySQL server instances (1 for standalone, 3+ for InnoDB Cluster)
+  instances: 1
+
+  # -- MySQL version
+  version: "9.6.0"
+
+  # -- Database authentication
+  auth:
+    # -- Database name for Guacamole
+    database: guacamole
+    # -- Database username
+    username: guacamole
+    # -- Database password (auto-generated if empty)
+    password: ""
+    # -- Root password (auto-generated if empty)
+    rootPassword: ""
+    # -- Use existing secret for root credentials
+    # Must contain keys: rootUser, rootHost, rootPassword
+    existingSecret: ""
+
+  # -- Storage configuration
+  storage:
+    # -- Storage size
+    size: 8Gi
+    # -- Storage class (empty for default)
+    storageClass: ""
+
+  # -- Resource requests/limits for MySQL pods
+  resources: {}
+
+  # -- MySQL Router configuration
+  router:
+    # -- Number of router instances
+    instances: 1
+    # -- Resources for router pods
+    resources: {}
+
+  # -- TLS configuration
+  tls:
+    # -- Use self-signed certificates
+    useSelfSigned: true
+    # -- Use existing secret for TLS certificates
+    # Must contain keys: tls.crt, tls.key, ca.crt
+    existingSecret: ""
+
+  # -- Backup configuration
+  backup:
+    # -- Enable automated backups
+    enabled: false
+    # -- Backup schedule (cron format)
+    schedule: "0 0 * * *"
+    # -- Backup storage configuration
+    storage:
+      # -- S3-compatible storage
+      s3:
+        # -- S3 bucket name
+        bucketName: ""
+        # -- S3 endpoint URL
+        endpoint: ""
+        # -- Secret containing S3 credentials
+        secretName: ""
+
+  # -- Scheduling configuration
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# =============================================================================
+# MariaDB Configuration (MariaDB Operator)
+# =============================================================================
+# PREREQUISITE: MariaDB Operator must be installed
+# Install: helm repo add mariadb-operator https://helm.mariadb.com/mariadb-operator
+#          helm install mariadb-operator mariadb-operator/mariadb-operator \
+#            --namespace mariadb-operator --create-namespace
+#
+# Documentation: https://github.com/mariadb-operator/mariadb-operator
+mariadb:
+  # -- Enable MariaDB via MariaDB Operator
+  enabled: false
+
+  # -- Number of replicas (1 for standalone, 3+ for Galera)
+  replicas: 1
+
+  image:
+    # -- MariaDB image repository
+    repository: mariadb
+    # -- MariaDB version tag
+    tag: "12.1"
+
+  # -- Database authentication
+  auth:
+    # -- Database name for Guacamole
+    database: guacamole
+    # -- Database username
+    username: guacamole
+    # -- Database password (auto-generated if empty)
+    password: ""
+    # -- Root password (auto-generated if empty)
+    rootPassword: ""
+    # -- Use existing secret for credentials
+    # Must contain keys: root-password, password
+    existingSecret: ""
+
+  # -- Storage configuration
+  storage:
+    # -- Storage size
+    size: 8Gi
+    # -- Storage class (empty for default)
+    storageClass: ""
+
+  # -- Resource requests/limits for MariaDB pods
+  resources: {}
+
+  # -- High Availability with Galera
+  galera:
+    # -- Enable Galera cluster (requires replicas >= 3)
+    enabled: false
+    # -- Galera agent image
+    agent:
+      image: ghcr.io/mariadb-operator/mariadb-operator:25.10.4
+    # -- Galera recovery configuration
+    recovery:
+      enabled: true
+      clusterHealthyTimeout: 3m
+      clusterBootstrapTimeout: 10m
+      podRecoveryTimeout: 5m
+      podSyncTimeout: 5m
+
+  # -- Replication configuration (alternative to Galera)
+  replication:
+    # -- Enable async replication
+    enabled: false
+    # -- Replication mode (async, semi-sync)
+    mode: async
+
+  # -- TLS configuration
+  tls:
+    # -- Enable TLS
+    enabled: false
+    # -- Use existing secret for TLS certificates
+    existingSecret: ""
+
+  # -- Backup configuration
+  backup:
+    # -- Enable automated backups
+    enabled: false
+    # -- Backup schedule (cron format)
+    schedule: "0 0 * * *"
+    # -- Maximum retained backups
+    maxRetained: 7
+    # -- S3 storage configuration
+    s3:
+      # -- S3 bucket name
+      bucket: ""
+      # -- S3 endpoint URL
+      endpoint: ""
+      # -- Secret containing S3 credentials
+      # Must contain keys: access-key-id, secret-access-key
+      secretName: ""
+
+  # -- Metrics / Monitoring
+  metrics:
+    # -- Enable Prometheus metrics exporter
+    enabled: false
+    # -- Exporter image
+    image: prom/mysqld-exporter:v0.18.0
+    # -- Resources for exporter
+    resources: {}
+    # -- Create ServiceMonitor for Prometheus Operator
+    serviceMonitor:
+      enabled: false
+
+  # -- Custom MariaDB configuration (my.cnf format)
+  # Will be appended to the default configuration
+  myCnf: ""
+
+  # -- Scheduling configuration
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# =============================================================================
+# SQL Server (External Only)
+# =============================================================================
+# SQL Server is only supported as an external database.
+# To use SQL Server:
+#   database:
+#     type: sqlserver
+#     external:
+#       enabled: true
+#       hostname: your-sqlserver.example.com
+#       port: 1433
+#       database: guacamole
+#       username: guacamole
+#       password: your-password
 
 # =============================================================================
 # Authentication Configuration
@@ -826,13 +714,13 @@ auth:
   duo:
     # -- Enable Duo 2FA
     enabled: false
-    # -- Duo API hostname (e.g., api-xxxxxxxx.duosecurity.com)
+    # -- Duo API hostname
     apiHostname: ""
     # -- Duo client ID
     clientId: ""
     # -- Duo client secret (use existingSecret for production)
     clientSecret: ""
-    # -- Existing secret with Duo credentials (key: client-secret)
+    # -- Existing secret with Duo credentials
     existingSecret: ""
     # -- Redirect URI for Duo callback
     redirectUri: ""
@@ -853,29 +741,29 @@ auth:
     authPort: 1812
     # -- RADIUS shared secret (use existingSecret for production)
     sharedSecret: ""
-    # -- Existing secret with RADIUS shared secret (key: shared-secret)
+    # -- Existing secret with RADIUS shared secret
     existingSecret: ""
-    # -- Authentication protocol (pap, chap, mschapv1, mschapv2, eap-md5, eap-tls, eap-ttls)
+    # -- Authentication protocol
     authProtocol: pap
     # -- Connection retries
     retries: 5
     # -- Connection timeout in seconds
     timeout: 60
-    # -- Trust all certificates (not recommended for production)
+    # -- Trust all certificates
     trustAll: false
-    # -- Network Access Server IP (auto-detected if empty)
+    # -- Network Access Server IP
     nasIp: ""
     # -- EAP-TTLS inner protocol
     eapTtlsInnerProtocol: ""
-    # -- Path to client key file (for EAP-TLS)
+    # -- Path to client key file
     keyFile: ""
-    # -- Key file type (pem, jceks, jks, pkcs12)
+    # -- Key file type
     keyType: ""
     # -- Key file password
     keyPassword: ""
     # -- Path to CA file
     caFile: ""
-    # -- CA file type (pem, jceks, jks, pkcs12)
+    # -- CA file type
     caType: ""
     # -- CA file password
     caPassword: ""
@@ -884,11 +772,11 @@ auth:
   cas:
     # -- Enable CAS authentication
     enabled: false
-    # -- CAS server authorization endpoint (e.g., https://cas.example.com/cas/)
+    # -- CAS server authorization endpoint
     authorizationEndpoint: ""
-    # -- Redirect URI for CAS callback (Guacamole base URL)
+    # -- Redirect URI for CAS callback
     redirectUri: ""
-    # -- Path to private key for ClearPass password decryption
+    # -- Path to private key for ClearPass
     clearpassKey: ""
     # -- CAS attribute for group membership
     groupAttribute: ""
@@ -899,16 +787,16 @@ auth:
     # -- LDAP attribute for group filtering
     groupLdapAttribute: ""
 
-  # -- JSON authentication (encrypted/signed JSON tokens)
+  # -- JSON authentication
   json:
     # -- Enable JSON authentication
     enabled: false
-    # -- 128-bit secret key as 32-character hex string (use existingSecret for production)
+    # -- 128-bit secret key as 32-character hex string
     secretKey: ""
-    # -- Existing secret with JSON secret key (key: secret-key)
+    # -- Existing secret with JSON secret key
     existingSecret: ""
 
-  # -- HTTP Header authentication (for reverse proxy integration)
+  # -- HTTP Header authentication
   header:
     # -- Enable HTTP header authentication
     enabled: false
@@ -921,7 +809,7 @@ auth:
     enabled: false
     # -- URI requiring client certificate
     authUri: ""
-    # -- URI without client certificate requirement (for logout)
+    # -- URI without client certificate requirement
     primaryUri: ""
     # -- HTTP header containing URL-encoded client certificate
     clientCertificateHeader: X-Client-Certificate
@@ -929,7 +817,7 @@ auth:
     clientVerifiedHeader: X-Client-Verified
     # -- Token validity duration in minutes
     maxTokenValidity: 5
-    # -- LDAP attribute(s) from certificate DN to extract username
+    # -- LDAP attribute from certificate DN to extract username
     subjectUsernameAttribute: ""
     # -- Base DN to restrict valid certificate subject DNs
     subjectBaseDn: ""
@@ -944,30 +832,28 @@ vault:
   ksm:
     # -- Enable KSM integration
     enabled: false
-    # -- Base64-encoded KSM configuration (use existingSecret for production)
+    # -- Base64-encoded KSM configuration
     config: ""
-    # -- Existing secret with KSM config (key: ksm-config)
+    # -- Existing secret with KSM config
     existingSecret: ""
     # -- Allow users to configure their own KSM vaults
     allowUserConfig: false
-    # -- Accept unverified certificates (not recommended for production)
+    # -- Accept unverified certificates
     allowUnverifiedCert: false
-    # -- Minimum milliseconds between API calls (to manage costs)
+    # -- Minimum milliseconds between API calls
     apiCallInterval: ""
     # -- Strip Windows domain prefixes from usernames
     stripWindowsDomains: false
 
 # =============================================================================
-# QuickConnect Configuration (Ad-hoc Connections)
+# QuickConnect Configuration
 # =============================================================================
 quickConnect:
   # -- Enable QuickConnect for ad-hoc connections
   enabled: false
-  # -- Allowed parameters (whitelist, comma-separated)
-  # Example: hostname,port,username,password
+  # -- Allowed parameters (comma-separated whitelist)
   allowedParameters: ""
-  # -- Denied parameters (blacklist, comma-separated, takes precedence over allowed)
-  # Example: file-transfer,drive-path,create-drive-path
+  # -- Denied parameters (comma-separated blacklist)
   deniedParameters: ""
 
 # =============================================================================
@@ -982,9 +868,7 @@ recording:
   createRecordingIndex: true
   # -- Enable recording playback in web UI
   playback:
-    # -- Enable playback feature
     enabled: false
-    # -- Search path for recordings (must match recording path)
     searchPath: /recordings
 
   persistence:
@@ -992,7 +876,7 @@ recording:
     enabled: false
     # -- Storage size
     size: 10Gi
-    # -- Storage class (empty for default)
+    # -- Storage class
     storageClass: ""
     # -- Access modes
     accessModes:
@@ -1009,27 +893,15 @@ ingress:
   # -- Ingress class name
   className: ""
   # -- Ingress annotations
-  # Example annotations for nginx ingress with WebSocket support:
-  # annotations:
-  #   kubernetes.io/ingress.class: nginx
-  #   cert-manager.io/cluster-issuer: letsencrypt-prod
-  #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
-  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-  #   nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
   annotations: {}
-
   # -- Ingress hosts
   hosts:
     - host: guacamole.local
       paths:
         - path: /
           pathType: Prefix
-
   # -- Ingress TLS configuration
   tls: []
-  #  - secretName: guacamole-tls
-  #    hosts:
-  #      - guacamole.local
 
 # =============================================================================
 # Network Policy Configuration
@@ -1037,12 +909,10 @@ ingress:
 networkPolicy:
   # -- Enable network policies
   enabled: false
-
   # -- Allow ingress from specific namespaces
   ingressNamespaceSelector: {}
   # -- Allow ingress from specific pods
   ingressPodSelector: {}
-
   # -- Additional ingress rules
   extraIngressRules: []
   # -- Additional egress rules
@@ -1052,10 +922,8 @@ networkPolicy:
 # Logging Configuration
 # =============================================================================
 logging:
-  # -- Guacamole log level
   guacamole:
     level: info
-  # -- Guacd log level
   guacd:
     level: info
 
@@ -1063,7 +931,6 @@ logging:
 # API & Session Configuration
 # =============================================================================
 api:
-  # -- API session settings
   session:
     # -- Session timeout in minutes (0 for no timeout)
     timeout: 60
@@ -1092,13 +959,8 @@ extensions:
   # -- Enable custom extension loading
   enabled: false
   # -- List of extensions to download and install
-  # Each extension should have a name and URL
-  # extensions:
-  #   - name: my-custom-extension
-  #     url: https://example.com/my-extension.jar
   list: []
   # -- Extra volume mounts for custom extensions
-  # Mount pre-built extensions from ConfigMaps or Secrets
   extraVolumeMounts: []
   # -- Extra volumes for custom extensions
   extraVolumes: []
@@ -1107,18 +969,14 @@ extensions:
 # Advanced Guacamole Configuration
 # =============================================================================
 advanced:
-  # -- GUACAMOLE_HOME directory (where config is stored)
+  # -- GUACAMOLE_HOME directory
   guacamoleHome: /etc/guacamole
-  # -- Skip schema creation even if database.init.enabled is true
-  skipSchemaCreation: false
   # -- Allowed file transfer paths (comma-separated)
   allowedFilePaths: ""
-  # -- Enable WebSocket tunnel (recommended for performance)
+  # -- Enable WebSocket tunnel
   websocket:
     enabled: true
   # -- Tomcat configuration
   tomcat:
-    # -- Maximum threads for Tomcat
     maxThreads: 200
-    # -- Connection timeout in milliseconds
     connectionTimeout: 20000

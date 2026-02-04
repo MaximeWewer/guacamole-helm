@@ -1,0 +1,15 @@
+{{- if and .Values.mysql.enabled (not .Values.database.external.enabled) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "guacamole.fullname" . }}-mysql-init
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql
+data:
+  init.sql: |
+    CREATE DATABASE IF NOT EXISTS {{ .Values.mysql.auth.database }};
+    CREATE USER IF NOT EXISTS '{{ .Values.mysql.auth.username }}'@'%' IDENTIFIED BY '${GUACAMOLE_PASSWORD}';
+    GRANT ALL PRIVILEGES ON {{ .Values.mysql.auth.database }}.* TO '{{ .Values.mysql.auth.username }}'@'%';
+    FLUSH PRIVILEGES;
+{{- end }}

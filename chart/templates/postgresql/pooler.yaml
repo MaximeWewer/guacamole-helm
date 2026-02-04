@@ -1,0 +1,31 @@
+{{- if and .Values.postgresql.enabled (not .Values.database.external.enabled) .Values.postgresql.pooler.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: {{ include "guacamole.fullname" . }}-postgresql-pooler
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql-pooler
+spec:
+  cluster:
+    name: {{ include "guacamole.fullname" . }}-postgresql
+
+  instances: {{ .Values.postgresql.pooler.instances | default 1 }}
+
+  type: rw
+
+  pgbouncer:
+    poolMode: {{ .Values.postgresql.pooler.poolMode | default "session" }}
+    parameters:
+      default_pool_size: "{{ .Values.postgresql.pooler.defaultPoolSize | default 10 }}"
+      max_client_conn: "{{ .Values.postgresql.pooler.maxClientConnections | default 100 }}"
+
+  {{- with .Values.postgresql.pooler.resources }}
+  template:
+    spec:
+      containers:
+        - name: pgbouncer
+          resources:
+            {{- toYaml . | nindent 12 }}
+  {{- end }}
+{{- end }}

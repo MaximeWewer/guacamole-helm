@@ -1,0 +1,35 @@
+{{- if and .Values.mariadb.enabled (not .Values.database.external.enabled) .Values.mariadb.backup.enabled }}
+{{- if .Values.mariadb.backup.s3.bucket }}
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Backup
+metadata:
+  name: {{ include "guacamole.fullname" . }}-mariadb-backup
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  mariaDbRef:
+    name: {{ include "guacamole.fullname" . }}-mariadb
+
+  schedule:
+    cron: {{ .Values.mariadb.backup.schedule | default "0 0 * * *" | quote }}
+    suspend: false
+
+  maxRetained: {{ .Values.mariadb.backup.maxRetained | default 7 }}
+
+  storage:
+    s3:
+      bucket: {{ .Values.mariadb.backup.s3.bucket }}
+      {{- if .Values.mariadb.backup.s3.endpoint }}
+      endpoint: {{ .Values.mariadb.backup.s3.endpoint }}
+      {{- end }}
+      {{- if .Values.mariadb.backup.s3.secretName }}
+      accessKeyIdSecretKeyRef:
+        name: {{ .Values.mariadb.backup.s3.secretName }}
+        key: access-key-id
+      secretAccessKeySecretKeyRef:
+        name: {{ .Values.mariadb.backup.s3.secretName }}
+        key: secret-access-key
+      {{- end }}
+{{- end }}
+{{- end }}

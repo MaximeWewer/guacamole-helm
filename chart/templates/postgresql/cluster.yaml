@@ -1,0 +1,104 @@
+{{- if and .Values.postgresql.enabled (not .Values.database.external.enabled) }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "guacamole.fullname" . }}-postgresql
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  instances: {{ .Values.postgresql.instances | default 1 }}
+  imageName: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
+
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgresql.auth.database }}
+      owner: {{ .Values.postgresql.auth.username }}
+      secret:
+        name: {{ include "guacamole.fullname" . }}-postgresql-credentials
+
+  storage:
+    size: {{ .Values.postgresql.storage.size }}
+    {{- if .Values.postgresql.storage.storageClass }}
+    storageClass: {{ .Values.postgresql.storage.storageClass }}
+    {{- end }}
+
+  {{- with .Values.postgresql.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+  {{- if and .Values.postgresql.ha.enabled (gt (int .Values.postgresql.instances) 1) }}
+  minSyncReplicas: {{ .Values.postgresql.ha.minSyncReplicas | default 1 }}
+  maxSyncReplicas: {{ .Values.postgresql.ha.maxSyncReplicas | default 1 }}
+  {{- end }}
+
+  {{- if .Values.postgresql.tls.enabled }}
+  enableSuperuserAccess: true
+  {{- if .Values.postgresql.tls.existingSecret }}
+  certificates:
+    serverTLSSecret: {{ .Values.postgresql.tls.existingSecret }}
+    serverCASecret: {{ .Values.postgresql.tls.existingSecret }}
+  {{- end }}
+  {{- end }}
+
+  {{- if .Values.postgresql.backup.enabled }}
+  backup:
+    barmanObjectStore:
+      {{- if .Values.postgresql.backup.s3.destinationPath }}
+      destinationPath: {{ .Values.postgresql.backup.s3.destinationPath }}
+      {{- if .Values.postgresql.backup.s3.endpointURL }}
+      endpointURL: {{ .Values.postgresql.backup.s3.endpointURL }}
+      {{- end }}
+      {{- if .Values.postgresql.backup.s3.secretName }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ .Values.postgresql.backup.s3.secretName }}
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ .Values.postgresql.backup.s3.secretName }}
+          key: ACCESS_SECRET_KEY
+      {{- end }}
+      {{- else if .Values.postgresql.backup.azure.destinationPath }}
+      destinationPath: {{ .Values.postgresql.backup.azure.destinationPath }}
+      {{- if .Values.postgresql.backup.azure.secretName }}
+      azureCredentials:
+        storageAccount:
+          name: {{ .Values.postgresql.backup.azure.secretName }}
+          key: AZURE_STORAGE_ACCOUNT
+        storageKey:
+          name: {{ .Values.postgresql.backup.azure.secretName }}
+          key: AZURE_STORAGE_KEY
+      {{- end }}
+      {{- else if .Values.postgresql.backup.gcs.destinationPath }}
+      destinationPath: {{ .Values.postgresql.backup.gcs.destinationPath }}
+      {{- if .Values.postgresql.backup.gcs.secretName }}
+      googleCredentials:
+        applicationCredentials:
+          name: {{ .Values.postgresql.backup.gcs.secretName }}
+          key: gcs-credentials.json
+      {{- end }}
+      {{- end }}
+    retentionPolicy: {{ .Values.postgresql.backup.retentionPolicy | default "30d" }}
+  {{- end }}
+
+  {{- if .Values.postgresql.monitoring.enabled }}
+  monitoring:
+    enablePodMonitor: {{ .Values.postgresql.monitoring.podMonitor | default false }}
+  {{- end }}
+
+  {{- with .Values.postgresql.nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+  {{- with .Values.postgresql.tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+  {{- with .Values.postgresql.affinity }}
+  affinity:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

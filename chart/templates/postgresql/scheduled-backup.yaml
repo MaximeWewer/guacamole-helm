@@ -1,0 +1,14 @@
+{{- if and .Values.postgresql.enabled (not .Values.database.external.enabled) .Values.postgresql.backup.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ include "guacamole.fullname" . }}-postgresql-backup
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  schedule: {{ .Values.postgresql.backup.schedule | default "0 0 * * *" | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ include "guacamole.fullname" . }}-postgresql
+{{- end }}

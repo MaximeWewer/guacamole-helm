@@ -103,20 +103,22 @@ app.kubernetes.io/component: guacamole
 
 {{/*
 Database hostname
+Note: Service naming conventions for operators:
+- CloudNative-PG creates a service named *-rw for the primary
+- MySQL Operator creates a service named * (cluster name)
+- MariaDB Operator creates a service named * (MariaDB name)
 */}}
 {{- define "guacamole.database.hostname" -}}
 {{- if .Values.database.external.enabled }}
 {{- required "database.external.hostname is required when database.external.enabled is true" .Values.database.external.hostname }}
 {{- else if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" (include "guacamole.fullname" .) }}
+{{- printf "%s-postgresql-rw" (include "guacamole.fullname" .) }}
 {{- else if .Values.mysql.enabled }}
 {{- printf "%s-mysql" (include "guacamole.fullname" .) }}
 {{- else if .Values.mariadb.enabled }}
 {{- printf "%s-mariadb" (include "guacamole.fullname" .) }}
-{{- else if .Values.sqlserver.enabled }}
-{{- printf "%s-sqlserver" (include "guacamole.fullname" .) }}
 {{- else }}
-{{- fail "One of postgresql.enabled, mysql.enabled, mariadb.enabled, sqlserver.enabled, or database.external.enabled must be true" }}
+{{- fail "One of postgresql.enabled, mysql.enabled, mariadb.enabled, or database.external.enabled must be true" }}
 {{- end }}
 {{- end }}
 
@@ -125,15 +127,25 @@ Database port
 */}}
 {{- define "guacamole.database.port" -}}
 {{- if .Values.database.external.enabled }}
-{{- .Values.database.external.port | default 5432 }}
+{{- if .Values.database.external.port }}
+{{- .Values.database.external.port }}
+{{- else if eq .Values.database.type "postgresql" }}
+{{- 5432 }}
+{{- else if eq .Values.database.type "mysql" }}
+{{- 3306 }}
+{{- else if eq .Values.database.type "mariadb" }}
+{{- 3306 }}
+{{- else if eq .Values.database.type "sqlserver" }}
+{{- 1433 }}
+{{- else }}
+{{- 5432 }}
+{{- end }}
 {{- else if .Values.postgresql.enabled }}
 {{- 5432 }}
 {{- else if .Values.mysql.enabled }}
 {{- 3306 }}
 {{- else if .Values.mariadb.enabled }}
 {{- 3306 }}
-{{- else if .Values.sqlserver.enabled }}
-{{- .Values.sqlserver.service.port | default 1433 }}
 {{- end }}
 {{- end }}
 
@@ -149,8 +161,6 @@ Database name
 {{- .Values.mysql.auth.database | default "guacamole" }}
 {{- else if .Values.mariadb.enabled }}
 {{- .Values.mariadb.auth.database | default "guacamole" }}
-{{- else if .Values.sqlserver.enabled }}
-{{- .Values.sqlserver.auth.database | default "guacamole" }}
 {{- end }}
 {{- end }}
 
@@ -166,13 +176,15 @@ Database username
 {{- .Values.mysql.auth.username | default "guacamole" }}
 {{- else if .Values.mariadb.enabled }}
 {{- .Values.mariadb.auth.username | default "guacamole" }}
-{{- else if .Values.sqlserver.enabled }}
-{{- .Values.sqlserver.auth.username | default "guacamole" }}
 {{- end }}
 {{- end }}
 
 {{/*
 Database secret name
+Note: Secret naming conventions for operators:
+- CloudNative-PG: *-postgresql-credentials (with keys: username, password)
+- MySQL Operator: *-mysql-credentials (with keys: rootUser, rootHost, rootPassword)
+- MariaDB Operator: *-mariadb-credentials (with keys: root-password, password)
 */}}
 {{- define "guacamole.database.secretName" -}}
 {{- if .Values.database.external.enabled }}
@@ -185,25 +197,19 @@ Database secret name
 {{- if .Values.postgresql.auth.existingSecret }}
 {{- .Values.postgresql.auth.existingSecret }}
 {{- else }}
-{{- printf "%s-postgresql" (include "guacamole.fullname" .) }}
+{{- printf "%s-postgresql-credentials" (include "guacamole.fullname" .) }}
 {{- end }}
 {{- else if .Values.mysql.enabled }}
 {{- if .Values.mysql.auth.existingSecret }}
 {{- .Values.mysql.auth.existingSecret }}
 {{- else }}
-{{- printf "%s-mysql" (include "guacamole.fullname" .) }}
+{{- printf "%s-mysql-credentials" (include "guacamole.fullname" .) }}
 {{- end }}
 {{- else if .Values.mariadb.enabled }}
 {{- if .Values.mariadb.auth.existingSecret }}
 {{- .Values.mariadb.auth.existingSecret }}
 {{- else }}
-{{- printf "%s-mariadb" (include "guacamole.fullname" .) }}
-{{- end }}
-{{- else if .Values.sqlserver.enabled }}
-{{- if .Values.sqlserver.auth.existingSecret }}
-{{- .Values.sqlserver.auth.existingSecret }}
-{{- else }}
-{{- printf "%s-sqlserver" (include "guacamole.fullname" .) }}
+{{- printf "%s-mariadb-credentials" (include "guacamole.fullname" .) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -596,15 +602,11 @@ API session environment variables
   value: {{ .Values.api.session.maxConnectionsPerUser | quote }}
 - name: POSTGRESQL_DEFAULT_MAX_CONNECTIONS_PER_USER
   value: {{ .Values.api.session.maxConnectionsPerUser | quote }}
-- name: SQLSERVER_DEFAULT_MAX_CONNECTIONS_PER_USER
-  value: {{ .Values.api.session.maxConnectionsPerUser | quote }}
 {{- end }}
 {{- if .Values.api.session.maxConnections }}
 - name: MYSQL_DEFAULT_MAX_CONNECTIONS
   value: {{ .Values.api.session.maxConnections | quote }}
 - name: POSTGRESQL_DEFAULT_MAX_CONNECTIONS
-  value: {{ .Values.api.session.maxConnections | quote }}
-- name: SQLSERVER_DEFAULT_MAX_CONNECTIONS
   value: {{ .Values.api.session.maxConnections | quote }}
 {{- end }}
 {{- end }}

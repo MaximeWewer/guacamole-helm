@@ -1,46 +1,25 @@
 # Patterns to ignore when building packages.
-# This supports shell glob matching, relative path matching, and
-# negation (prefixed with !). Only one pattern per line.
 .DS_Store
-# Common VCS dirs
 .git/
 .gitignore
 .bzr/
-.bzrignore
 .hg/
-.hgignore
 .svn/
-# Common backup files
 *.swp
 *.bak
 *.tmp
 *.orig
 *~
-# Various IDEs
 .project
 .idea/
 *.tmproj
 .vscode/
-# Specify files
-.specify/
-specs/
-# CI/CD
 .github/
 .gitlab-ci.yml
 .travis.yml
 Makefile
-# Documentation source
-docs/
-*.md
-!README.md
-# Test files
 tests/
 *_test.yaml
-# Lock files
 Chart.lock
-# Local development
 .env
 *.local
-# Python cache (if any tooling)
-__pycache__/
-*.pyc

@@ -1,4 +1,15 @@
 {{- if .Values.guacamole.enabled -}}
+{{- /* Determine the effective database type based on enabled flags */ -}}
+{{- $dbType := "" -}}
+{{- if .Values.postgresql.enabled -}}
+  {{- $dbType = "postgresql" -}}
+{{- else if .Values.mysql.enabled -}}
+  {{- $dbType = "mysql" -}}
+{{- else if .Values.mariadb.enabled -}}
+  {{- $dbType = "mariadb" -}}
+{{- else if .Values.database.external.enabled -}}
+  {{- $dbType = .Values.database.type -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,165 +44,6 @@ spec:
       securityContext:
         {{- toYaml .Values.guacamole.podSecurityContext | nindent 8 }}
       terminationGracePeriodSeconds: {{ .Values.guacamole.terminationGracePeriodSeconds }}
-      {{- if .Values.database.init.enabled }}
-      initContainers:
-        # Generate and apply database schema
-        - name: db-init
-          image: {{ include "guacamole.image" . }}
-          imagePullPolicy: {{ .Values.guacamole.image.pullPolicy }}
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -e
-              echo "Generating Guacamole database schema..."
-              {{- if eq .Values.database.type "postgresql" }}
-              /opt/guacamole/bin/initdb.sh --postgresql > /tmp/initdb.sql
-              {{- else if or (eq .Values.database.type "mysql") (eq .Values.database.type "mariadb") }}
-              /opt/guacamole/bin/initdb.sh --mysql > /tmp/initdb.sql
-              {{- else if eq .Values.database.type "sqlserver" }}
-              /opt/guacamole/bin/initdb.sh --sqlserver > /tmp/initdb.sql
-              {{- end }}
-              echo "Schema generated: $(wc -l < /tmp/initdb.sql) lines"
-              cp /tmp/initdb.sql /schema/initdb.sql
-          volumeMounts:
-            - name: schema
-              mountPath: /schema
-            - name: tmp
-              mountPath: /tmp
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-          resources:
-            {{- toYaml .Values.database.init.resources | nindent 12 }}
-        - name: db-apply
-          {{- if eq .Values.database.type "postgresql" }}
-          image: "{{ .Values.database.init.clientImages.postgresql.repository }}:{{ .Values.database.init.clientImages.postgresql.tag }}"
-          {{- else if eq .Values.database.type "mysql" }}
-          image: "{{ .Values.database.init.clientImages.mysql.repository }}:{{ .Values.database.init.clientImages.mysql.tag }}"
-          {{- else if eq .Values.database.type "mariadb" }}
-          image: "{{ .Values.database.init.clientImages.mariadb.repository }}:{{ .Values.database.init.clientImages.mariadb.tag }}"
-          {{- else if eq .Values.database.type "sqlserver" }}
-          image: "{{ .Values.database.init.clientImages.sqlserver.repository }}:{{ .Values.database.init.clientImages.sqlserver.tag }}"
-          {{- end }}
-          imagePullPolicy: {{ .Values.database.init.image.pullPolicy }}
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -e
-              echo "Waiting for database to be ready..."
-
-              {{- if eq .Values.database.type "postgresql" }}
-              # Wait for PostgreSQL
-              until PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; do
-                echo "PostgreSQL not ready, waiting..."
-                sleep 5
-              done
-              echo "PostgreSQL is ready."
-
-              # Check if schema exists
-              TABLES_EXIST=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'guacamole_user');" 2>/dev/null || echo "f")
-              if [ "$TABLES_EXIST" = "t" ]; then
-                echo "Schema already exists, skipping initialization."
-              else
-                echo "Applying database schema..."
-                PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /schema/initdb.sql
-                echo "Schema applied successfully."
-              fi
-              {{- else if eq .Values.database.type "mysql" }}
-              # Wait for MySQL
-              until mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "SELECT 1" 2>/dev/null; do
-                echo "MySQL not ready, waiting..."
-                sleep 5
-              done
-              echo "MySQL is ready."
-
-              # Check if schema exists
-              TABLES_EXIST=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" -sNe "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'guacamole_user';" 2>/dev/null || echo "0")
-              if [ "$TABLES_EXIST" -gt 0 ]; then
-                echo "Schema already exists, skipping initialization."
-              else
-                echo "Applying database schema..."
-                mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" < /schema/initdb.sql
-                echo "Schema applied successfully."
-              fi
-              {{- else if eq .Values.database.type "mariadb" }}
-              # Wait for MariaDB
-              until mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "SELECT 1" 2>/dev/null; do
-                echo "MariaDB not ready, waiting..."
-                sleep 5
-              done
-              echo "MariaDB is ready."
-
-              # Check if schema exists
-              TABLES_EXIST=$(mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" -sNe "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'guacamole_user';" 2>/dev/null || echo "0")
-              if [ "$TABLES_EXIST" -gt 0 ]; then
-                echo "Schema already exists, skipping initialization."
-              else
-                echo "Applying database schema..."
-                mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" < /schema/initdb.sql
-                echo "Schema applied successfully."
-              fi
-              {{- else if eq .Values.database.type "sqlserver" }}
-              # Wait for SQL Server using SA account (-C trusts server certificate)
-              until /opt/mssql-tools18/bin/sqlcmd -S "$DB_HOST,$DB_PORT" -U sa -P "$SA_PASSWORD" -C -Q "SELECT 1" 2>/dev/null; do
-                echo "SQL Server not ready, waiting..."
-                sleep 5
-              done
-              echo "SQL Server is ready."
-
-              # Create database if not exists
-              echo "Creating database if not exists..."
-              /opt/mssql-tools18/bin/sqlcmd -S "$DB_HOST,$DB_PORT" -U sa -P "$SA_PASSWORD" -C -Q "IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = '$DB_NAME') CREATE DATABASE [$DB_NAME]"
-
-              # Check if schema exists
-              TABLES_EXIST=$(/opt/mssql-tools18/bin/sqlcmd -S "$DB_HOST,$DB_PORT" -U sa -P "$SA_PASSWORD" -d "$DB_NAME" -C -h -1 -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'guacamole_user'" 2>/dev/null | tr -d ' ' || echo "0")
-              if [ "$TABLES_EXIST" -gt 0 ]; then
-                echo "Schema already exists, skipping initialization."
-              else
-                echo "Applying database schema..."
-                /opt/mssql-tools18/bin/sqlcmd -S "$DB_HOST,$DB_PORT" -U sa -P "$SA_PASSWORD" -d "$DB_NAME" -C -i /schema/initdb.sql
-                echo "Schema applied successfully."
-              fi
-              {{- end }}
-
-              echo "Database initialization completed."
-          env:
-            - name: DB_HOST
-              value: {{ include "guacamole.database.hostname" . | quote }}
-            - name: DB_PORT
-              value: {{ include "guacamole.database.port" . | quote }}
-            - name: DB_NAME
-              value: {{ include "guacamole.database.name" . | quote }}
-            - name: DB_USER
-              value: {{ include "guacamole.database.username" . | quote }}
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "guacamole.database.secretName" . }}
-                  key: {{ include "guacamole.database.secretKey" . }}
-            {{- if eq .Values.database.type "sqlserver" }}
-            - name: SA_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "guacamole.database.secretName" . }}
-                  key: sa-password
-            {{- end }}
-          volumeMounts:
-            - name: schema
-              mountPath: /schema
-              readOnly: true
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-          resources:
-            {{- toYaml .Values.database.init.resources | nindent 12 }}
-      {{- end }}
       containers:
         - name: guacamole
           image: {{ include "guacamole.image" . }}
@@ -209,7 +61,7 @@ spec:
             - name: GUACD_PORT
               value: {{ .Values.guacd.service.port | quote }}
             # Database connection
-            {{- if eq .Values.database.type "postgresql" }}
+            {{- if eq $dbType "postgresql" }}
             - name: POSTGRESQL_HOSTNAME
               value: {{ include "guacamole.database.hostname" . }}
             - name: POSTGRESQL_PORT
@@ -223,7 +75,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "guacamole.database.secretName" . }}
                   key: {{ include "guacamole.database.secretKey" . }}
-            {{- else if or (eq .Values.database.type "mysql") (eq .Values.database.type "mariadb") }}
+            {{- else if or (eq $dbType "mysql") (eq $dbType "mariadb") }}
             - name: MYSQL_HOSTNAME
               value: {{ include "guacamole.database.hostname" . }}
             - name: MYSQL_PORT
@@ -237,7 +89,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "guacamole.database.secretName" . }}
                   key: {{ include "guacamole.database.secretKey" . }}
-            {{- else if eq .Values.database.type "sqlserver" }}
+            {{- else if eq $dbType "sqlserver" }}
             - name: SQLSERVER_HOSTNAME
               value: {{ include "guacamole.database.hostname" . }}
             - name: SQLSERVER_PORT
@@ -340,10 +192,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-        {{- if .Values.database.init.enabled }}
-        - name: schema
-          emptyDir: {}
-        {{- end }}
         {{- with .Values.guacamole.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

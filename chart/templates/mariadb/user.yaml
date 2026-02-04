@@ -1,0 +1,34 @@
+{{- if and .Values.mariadb.enabled (not .Values.database.external.enabled) }}
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: User
+metadata:
+  name: {{ include "guacamole.fullname" . }}-user
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  mariaDbRef:
+    name: {{ include "guacamole.fullname" . }}-mariadb
+  passwordSecretKeyRef:
+    name: {{ include "guacamole.fullname" . }}-mariadb-credentials
+    key: password
+  name: {{ .Values.mariadb.auth.username }}
+  host: "%"
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: {{ include "guacamole.fullname" . }}-grant
+  labels:
+    {{- include "guacamole.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  mariaDbRef:
+    name: {{ include "guacamole.fullname" . }}-mariadb
+  privileges:
+    - ALL PRIVILEGES
+  database: {{ .Values.mariadb.auth.database }}
+  table: "*"
+  username: {{ .Values.mariadb.auth.username }}
+  grantOption: false
+{{- end }}

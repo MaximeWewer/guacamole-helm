@@ -1,0 +1,489 @@
+{{ template "chart.header" . }}
+
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+{{ template "chart.homepageLine" . }}
+
+## TL;DR
+
+```bash
+# Install the required operator first (CloudNative-PG for PostgreSQL)
+helm repo add cnpg https://cloudnative-pg.github.io/charts
+helm install cnpg cnpg/cloudnative-pg \
+  --namespace cnpg-system --create-namespace
+
+# Install the chart
+helm install guacamole . -n guacamole --create-namespace
+```
+
+## Introduction
+
+This chart deploys [Apache Guacamole](https://guacamole.apache.org/) on a Kubernetes cluster. It uses **Kubernetes operators** for database management, providing production-grade features like high availability, automated backups, and TLS encryption.
+
+### Components
+
+- **Guacamole** - Web application (`guacamole/guacamole`)
+- **Guacd** - Connection proxy daemon (`guacamole/guacd`)
+- **Database** - Managed by Kubernetes operators:
+  - PostgreSQL via [CloudNative-PG](https://cloudnative-pg.io/)
+  - MySQL via [MySQL Operator](https://dev.mysql.com/doc/mysql-operator/en/)
+  - MariaDB via [MariaDB Operator](https://github.com/mariadb-operator/mariadb-operator)
+
+### Features
+
+- Kubernetes operator-based database management (HA, backups, TLS)
+- Automatic Guacamole schema initialization via Helm hooks
+- Comprehensive authentication (OIDC, SAML, LDAP, TOTP, Duo, RADIUS, CAS)
+- Session recording with playback support
+- Network policies and RBAC
+- Ingress with WebSocket support
+
+## Prerequisites
+
+- Kubernetes 1.25+
+- Helm 3.x
+- PV provisioner (for persistence)
+
+### Database Operators
+
+Install the operator for your chosen database **before** deploying this chart:
+
+#### CloudNative-PG (PostgreSQL) - Default
+
+```bash
+helm repo add cnpg https://cloudnative-pg.github.io/charts
+helm install cnpg cnpg/cloudnative-pg \
+  --namespace cnpg-system --create-namespace
+```
+
+#### MariaDB Operator
+
+```bash
+helm repo add mariadb-operator https://helm.mariadb.com/mariadb-operator
+helm install mariadb-operator-crds mariadb-operator/mariadb-operator-crds \
+  --namespace mariadb-operator --create-namespace
+helm install mariadb-operator mariadb-operator/mariadb-operator \
+  --namespace mariadb-operator
+```
+
+#### MySQL Operator
+
+```bash
+helm repo add mysql-operator https://mysql.github.io/mysql-operator/
+helm install mysql-operator mysql-operator/mysql-operator \
+  --namespace mysql-operator --create-namespace
+```
+
+## Installing the Chart
+
+```bash
+helm install guacamole . -n guacamole --create-namespace
+```
+
+## Uninstalling the Chart
+
+```bash
+helm uninstall guacamole -n guacamole
+
+# Remove PVCs if desired
+kubectl delete pvc -l app.kubernetes.io/instance=guacamole -n guacamole
+```
+
+{{ template "chart.requirementsSection" . }}
+
+## Configuration
+
+### Database Selection
+
+| Database   | Operator         | CRD Created      | Values Key   |
+|------------|------------------|------------------|--------------|
+| PostgreSQL | CloudNative-PG   | `Cluster`        | `postgresql` |
+| MySQL      | MySQL Operator   | `InnoDBCluster`  | `mysql`      |
+| MariaDB    | MariaDB Operator | `MariaDB`        | `mariadb`    |
+
+Only enable **one** internal database at a time. For external databases, set all internal databases to `enabled: false` and configure `database.external`.
+
+### Quick Examples
+
+#### PostgreSQL with HA
+
+```yaml
+postgresql:
+  enabled: true
+  instances: 3
+  ha:
+    enabled: true
+    minSyncReplicas: 1
+  auth:
+    password: "secure-password"
+```
+
+#### MySQL InnoDB Cluster
+
+```yaml
+postgresql:
+  enabled: false
+mysql:
+  enabled: true
+  instances: 3
+  auth:
+    password: "secure-password"
+    rootPassword: "root-password"
+```
+
+#### MariaDB with Galera
+
+```yaml
+postgresql:
+  enabled: false
+mariadb:
+  enabled: true
+  replicas: 3
+  galera:
+    enabled: true
+  auth:
+    password: "secure-password"
+    rootPassword: "root-password"
+```
+
+#### External Database
+
+```yaml
+postgresql:
+  enabled: false
+database:
+  type: postgresql  # postgresql, mysql, mariadb, sqlserver
+  external:
+    enabled: true
+    hostname: "db.example.com"
+    port: 5432
+    database: guacamole
+    username: guacamole
+    existingSecret: db-credentials
+```
+
+> **Note**: SQL Server is only supported as an external database.
+
+## Values
+
+### Global
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if not (contains "." .Key) }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Guacamole Client
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "guacamole." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Guacd (Connection Proxy)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "guacd." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Database Configuration
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "database." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### PostgreSQL (CloudNative-PG)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "postgresql." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### MySQL (MySQL Operator)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "mysql." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### MariaDB (MariaDB Operator)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "mariadb." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Authentication
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "auth." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Proxy
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "proxy." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Vault / Secrets Management
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "vault." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### QuickConnect
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "quickConnect." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Recording
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "recording." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### API & Session
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "api." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Brute Force Protection
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "bruteForce." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Ingress
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "ingress." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Network Policy
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "networkPolicy." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Service Account & RBAC
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if or (hasPrefix "serviceAccount." .Key) (hasPrefix "rbac." .Key) }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Extensions
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "extensions." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Logging
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "logging." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+### Advanced
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+{{- range .Values }}
+{{- if hasPrefix "advanced." .Key }}
+| {{ .Key }} | {{ .Type }} | {{ if .Default }}{{ .Default }}{{ else }}{{ .AutoDefault }}{{ end }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+{{- end }}
+
+## Examples
+
+### Production Setup with OIDC
+
+```yaml
+guacamole:
+  replicaCount: 3
+  pdb:
+    enabled: true
+    minAvailable: 2
+
+guacd:
+  replicaCount: 3
+  pdb:
+    enabled: true
+
+postgresql:
+  enabled: true
+  instances: 3
+  ha:
+    enabled: true
+  tls:
+    enabled: true
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"
+    s3:
+      destinationPath: s3://backups/guacamole
+      secretName: s3-creds
+
+auth:
+  oidc:
+    enabled: true
+    authorizationEndpoint: "https://idp.example.com/auth"
+    issuer: "https://idp.example.com"
+    jwksEndpoint: "https://idp.example.com/certs"
+    clientId: "guacamole"
+    existingSecret: oidc-secret
+  totp:
+    enabled: true
+    mode: required
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  hosts:
+    - host: guacamole.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: guacamole-tls
+      hosts:
+        - guacamole.example.com
+```
+
+### Session Recording
+
+```yaml
+recording:
+  enabled: true
+  playback:
+    enabled: true
+  persistence:
+    enabled: true
+    size: 100Gi
+    storageClass: fast-storage
+```
+
+## Troubleshooting
+
+### Database Initialization
+
+Check the db-init job logs:
+
+```bash
+kubectl get jobs -n guacamole
+kubectl logs job/guacamole-db-init -n guacamole --all-containers
+```
+
+### Operator CRDs
+
+Verify operator status:
+
+```bash
+# CloudNative-PG
+kubectl get clusters.postgresql.cnpg.io -n guacamole
+
+# MariaDB
+kubectl get mariadbs.k8s.mariadb.com -n guacamole
+
+# MySQL
+kubectl get innodbclusters.mysql.oracle.com -n guacamole
+```
+
+### WebSocket Issues
+
+Ensure ingress has proper timeouts:
+
+```yaml
+ingress:
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+```
+
+## Links
+
+- [Apache Guacamole](https://guacamole.apache.org/)
+- [Guacamole Documentation](https://guacamole.apache.org/doc/gug/)
+- [CloudNative-PG](https://cloudnative-pg.io/)
+- [MariaDB Operator](https://github.com/mariadb-operator/mariadb-operator)
+- [MySQL Operator](https://dev.mysql.com/doc/mysql-operator/en/)
