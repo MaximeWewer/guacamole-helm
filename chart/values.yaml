@@ -878,7 +878,7 @@ recording:
     size: 10Gi
     # -- Storage class
     storageClass: ""
-    # -- Access modes
+    # -- Access modes. Use ReadWriteMany if your storage supports it; otherwise ReadWriteOnce works because the chart auto-adds a pod affinity to colocate guacamole with guacd on the same node
     accessModes:
       - ReadWriteOnce
     # -- Existing PVC name
